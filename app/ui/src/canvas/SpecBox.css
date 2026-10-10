@@ -1,0 +1,103 @@
+/* SpecBox node: C4-style box. Token variables only. */
+
+.spec-box {
+  width: 210px;
+  box-sizing: border-box;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-strong);
+  border-radius: var(--sp-radius-box);
+  padding: var(--sp-space-3) var(--sp-space-4);
+  box-shadow: var(--sp-shadow-l1);
+  transition:
+    border-color var(--sp-motion-fast) var(--sp-motion-ease),
+    box-shadow var(--sp-motion-fast) var(--sp-motion-ease),
+    opacity var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.spec-box--external {
+  border-style: dashed;
+}
+
+.spec-box:hover {
+  border-color: var(--sp-color-text-tertiary);
+  box-shadow:
+    inset 0 0 0 999px var(--sp-color-bg-hover),
+    var(--sp-shadow-l1);
+}
+
+/* Selection: accent 1.5px stroke + accent-at-12% fill. */
+.react-flow__node.selected .spec-box {
+  border: 1.5px solid var(--sp-color-accent-primary);
+  background-color: color-mix(
+    in srgb,
+    var(--sp-color-accent-primary) 12%,
+    var(--sp-color-bg-raised)
+  );
+  box-shadow: var(--sp-shadow-l2);
+}
+
+.spec-box__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-space-2);
+  margin-bottom: var(--sp-space-1);
+}
+
+.spec-box__kind {
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
+  line-height: var(--sp-type-caption-line);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sp-color-text-tertiary);
+}
+
+.spec-box__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--sp-space-1);
+  border: 1px solid var(--sp-color-border-strong);
+  border-radius: var(--sp-radius-pill);
+  background: var(--sp-color-bg-chrome);
+  color: var(--sp-color-text-secondary);
+  font-family: var(--sp-font-mono);
+  font-size: var(--sp-type-caption-size);
+  line-height: 1;
+}
+
+.spec-box__title {
+  font-size: var(--sp-type-title-sm-size);
+  font-weight: var(--sp-type-title-sm-weight);
+  line-height: var(--sp-type-title-sm-line);
+  color: var(--sp-color-text-primary);
+}
+
+.spec-box__caption {
+  margin-top: 2px;
+  font-size: var(--sp-type-body-sm-size);
+  font-weight: var(--sp-type-body-sm-weight);
+  line-height: var(--sp-type-body-sm-line);
+  color: var(--sp-color-text-secondary);
+}
+
+.spec-box__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-space-1);
+  margin-top: var(--sp-space-2);
+}
+
+/* Invisible connection points — edges attach without visual noise. */
+.spec-box__handle {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  border: 0;
+  pointer-events: none;
+}

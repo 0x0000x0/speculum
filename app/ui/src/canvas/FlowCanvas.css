@@ -1,0 +1,95 @@
+/* Demo canvas: token-driven React Flow chrome + hover highlight. */
+
+.flow-canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--sp-color-bg-canvas);
+}
+
+/* Let React Flow inherit the app font instead of its system default. */
+.flow-canvas .react-flow {
+  font-family: var(--sp-font-ui);
+}
+
+.flow-canvas .react-flow__attribution {
+  background: transparent;
+  color: var(--sp-color-text-tertiary);
+}
+
+.flow-canvas .react-flow__attribution a {
+  color: var(--sp-color-text-tertiary);
+}
+
+/* --- hover-highlight dimming (IcePanel-style, M3 first pass) --- */
+
+.flow-canvas .react-flow__node {
+  transition: opacity var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.flow-canvas .spec-node--dim {
+  opacity: var(--sp-dim-unrelated);
+}
+
+.flow-canvas .react-flow__edge {
+  transition: opacity var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.flow-canvas .flow-edge--dim {
+  opacity: var(--sp-dim-unrelated);
+}
+
+/* --- edge label pills: raised surface, bordered, caption type --- */
+
+.flow-canvas .react-flow__edge-textbg {
+  fill: var(--sp-color-bg-raised);
+  stroke: var(--sp-color-border-subtle);
+  opacity: 0.85;
+}
+
+.flow-canvas .react-flow__edge-text {
+  fill: var(--sp-color-text-secondary);
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
+}
+
+.flow-canvas .flow-edge--hi .react-flow__edge-textbg {
+  opacity: 1;
+  stroke-width: 1.5;
+}
+
+.flow-canvas .flow-edge--hi .react-flow__edge-text {
+  fill: var(--sp-color-text-primary);
+}
+
+.flow-canvas .flow-edge--out .react-flow__edge-textbg {
+  stroke: var(--sp-color-accent-primary);
+}
+
+.flow-canvas .flow-edge--in .react-flow__edge-textbg {
+  stroke: var(--sp-color-accent-secondary);
+}
+
+/* --- animated dash flow on highlighted edges --- */
+
+.flow-canvas .flow-edge--hi .react-flow__edge-path {
+  stroke-dasharray: 6 6;
+  animation: spec-flow calc(var(--sp-motion-drill) * 4) linear infinite;
+}
+
+@keyframes spec-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-canvas .flow-edge--hi .react-flow__edge-path {
+    animation: none;
+  }
+
+  .flow-canvas .react-flow__node,
+  .flow-canvas .react-flow__edge {
+    transition: none;
+  }
+}

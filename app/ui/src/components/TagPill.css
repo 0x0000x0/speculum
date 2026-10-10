@@ -1,0 +1,89 @@
+/* Tag pills read their palette from per-tag token variables. */
+
+.sp-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--sp-space-2);
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid var(--sp-tag-border, transparent);
+  background: var(--sp-tag-bg);
+  color: var(--sp-tag-fg);
+  font-size: var(--sp-type-caption-size);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.sp-tag-pill[data-tag="slate"] {
+  --sp-tag-bg: var(--sp-tag-slate-bg);
+  --sp-tag-fg: var(--sp-tag-slate-fg);
+  --sp-tag-border: var(--sp-tag-slate-border);
+}
+
+.sp-tag-pill[data-tag="blue"] {
+  --sp-tag-bg: var(--sp-tag-blue-bg);
+  --sp-tag-fg: var(--sp-tag-blue-fg);
+  --sp-tag-border: var(--sp-tag-blue-border);
+}
+
+.sp-tag-pill[data-tag="violet"] {
+  --sp-tag-bg: var(--sp-tag-violet-bg);
+  --sp-tag-fg: var(--sp-tag-violet-fg);
+  --sp-tag-border: var(--sp-tag-violet-border);
+}
+
+.sp-tag-pill[data-tag="purple"] {
+  --sp-tag-bg: var(--sp-tag-purple-bg);
+  --sp-tag-fg: var(--sp-tag-purple-fg);
+  --sp-tag-border: var(--sp-tag-purple-border);
+}
+
+.sp-tag-pill[data-tag="pink"] {
+  --sp-tag-bg: var(--sp-tag-pink-bg);
+  --sp-tag-fg: var(--sp-tag-pink-fg);
+  --sp-tag-border: var(--sp-tag-pink-border);
+}
+
+.sp-tag-pill[data-tag="red"] {
+  --sp-tag-bg: var(--sp-tag-red-bg);
+  --sp-tag-fg: var(--sp-tag-red-fg);
+  --sp-tag-border: var(--sp-tag-red-border);
+}
+
+.sp-tag-pill[data-tag="orange"] {
+  --sp-tag-bg: var(--sp-tag-orange-bg);
+  --sp-tag-fg: var(--sp-tag-orange-fg);
+  --sp-tag-border: var(--sp-tag-orange-border);
+}
+
+.sp-tag-pill[data-tag="amber"] {
+  --sp-tag-bg: var(--sp-tag-amber-bg);
+  --sp-tag-fg: var(--sp-tag-amber-fg);
+  --sp-tag-border: var(--sp-tag-amber-border);
+}
+
+.sp-tag-pill[data-tag="lime"] {
+  --sp-tag-bg: var(--sp-tag-lime-bg);
+  --sp-tag-fg: var(--sp-tag-lime-fg);
+  --sp-tag-border: var(--sp-tag-lime-border);
+}
+
+.sp-tag-pill[data-tag="green"] {
+  --sp-tag-bg: var(--sp-tag-green-bg);
+  --sp-tag-fg: var(--sp-tag-green-fg);
+  --sp-tag-border: var(--sp-tag-green-border);
+}
+
+.sp-tag-pill[data-tag="teal"] {
+  --sp-tag-bg: var(--sp-tag-teal-bg);
+  --sp-tag-fg: var(--sp-tag-teal-fg);
+  --sp-tag-border: var(--sp-tag-teal-border);
+}
+
+.sp-tag-pill[data-tag="cyan"] {
+  --sp-tag-bg: var(--sp-tag-cyan-bg);
+  --sp-tag-fg: var(--sp-tag-cyan-fg);
+  --sp-tag-border: var(--sp-tag-cyan-border);
+}

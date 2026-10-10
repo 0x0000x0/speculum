@@ -1,0 +1,72 @@
+{
+  "results": [
+    {
+      "sys": {
+        "theme": "dark",
+        "body": "rgb(14, 17, 22)",
+        "topbar": "rgb(14, 17, 22)",
+        "text": "rgb(243, 245, 249)",
+        "panel": "rgb(14, 17, 22)",
+        "status": "rgb(14, 17, 22)"
+      },
+      "light": {
+        "theme": "light",
+        "body": "rgb(247, 247, 248)",
+        "topbar": "rgb(247, 247, 248)",
+        "text": "rgb(17, 24, 39)",
+        "panel": "rgb(247, 247, 248)",
+        "status": "rgb(247, 247, 248)"
+      },
+      "dark": {
+        "theme": "dark",
+        "body": "rgb(14, 17, 22)",
+        "topbar": "rgb(14, 17, 22)",
+        "text": "rgb(243, 245, 249)",
+        "panel": "rgb(14, 17, 22)",
+        "status": "rgb(14, 17, 22)"
+      },
+      "sysLight": {
+        "theme": "light",
+        "body": "rgb(247, 247, 248)",
+        "topbar": "rgb(247, 247, 248)",
+        "text": "rgb(17, 24, 39)",
+        "panel": "rgb(247, 247, 248)",
+        "status": "rgb(247, 247, 248)"
+      }
+    },
+    {
+      "sizes": {
+        "header": 40,
+        "footer": 28,
+        "aside": 300,
+        "bodyFont": "\"Inter Variable\", \"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif",
+        "bodySize": "13px",
+        "vars": {
+          "--sp-space-0_5": "2px",
+          "--sp-space-1": "4px",
+          "--sp-space-2": "8px",
+          "--sp-space-3": "12px",
+          "--sp-space-4": "16px",
+          "--sp-space-5": "20px",
+          "--sp-space-6": "24px",
+          "--sp-space-8": "32px",
+          "--sp-space-10": "40px",
+          "--sp-space-12": "48px",
+          "--sp-space-16": "64px",
+          "--sp-layout-toolbar-height": "40px",
+          "--sp-layout-side-panel-width": "300px",
+          "--sp-layout-side-panel-min": "260px",
+          "--sp-layout-side-panel-max": "420px",
+          "--sp-layout-status-bar-height": "28px",
+          "--sp-radius-control": "6px",
+          "--sp-radius-box": "8px",
+          "--sp-radius-popover": "12px",
+          "--sp-radius-pill": "999px",
+          "--xy-node-border-radius-default": ""
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "externalRequests": []
+}

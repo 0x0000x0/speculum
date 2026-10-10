@@ -1,0 +1,57 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Application base styles. All values come from tokens.css variables. */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-size);
+  font-weight: var(--sp-type-body-weight);
+  line-height: var(--sp-type-body-line);
+  background: var(--sp-color-bg-chrome);
+  color: var(--sp-color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* Visible keyboard focus everywhere: 2px ring + 2px offset. */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--sp-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--sp-radius-control);
+}
+
+/* Brief color/background transition while the theme switches.
+   The ThemeProvider adds .theme-switching on change only and removes
+   it after 250ms, so normal hover/active states stay snappy. */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition:
+    color var(--sp-motion-base) var(--sp-motion-ease),
+    background-color var(--sp-motion-base) var(--sp-motion-ease),
+    border-color var(--sp-motion-base) var(--sp-motion-ease),
+    fill var(--sp-motion-base) var(--sp-motion-ease),
+    stroke var(--sp-motion-base) var(--sp-motion-ease) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-switching,
+  .theme-switching *,
+  .theme-switching *::before,
+  .theme-switching *::after {
+    transition: none !important;
+  }
+}

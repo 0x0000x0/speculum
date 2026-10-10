@@ -1,0 +1,82 @@
+/* Reusable button. All values are token variables. */
+
+.sp-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-space-2);
+  height: 28px;
+  padding: 0 var(--sp-space-3);
+  border-radius: var(--sp-radius-control);
+  border: 1px solid transparent;
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-size);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--sp-motion-fast) var(--sp-motion-ease),
+    border-color var(--sp-motion-fast) var(--sp-motion-ease),
+    transform var(--sp-motion-fast) var(--sp-motion-ease),
+    opacity var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.sp-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.sp-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sp-button--primary {
+  background: var(--sp-color-accent-primary);
+  color: var(--sp-color-accent-on);
+}
+
+.sp-button--primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.sp-button--secondary {
+  background: transparent;
+  border-color: var(--sp-color-border-strong);
+  color: var(--sp-color-text-primary);
+}
+
+.sp-button--secondary:hover:not(:disabled) {
+  background: var(--sp-color-bg-hover);
+}
+
+.sp-button--ghost {
+  background: transparent;
+  color: var(--sp-color-text-secondary);
+}
+
+.sp-button--ghost:hover:not(:disabled) {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.sp-button--danger {
+  background: transparent;
+  border-color: var(--sp-color-state-danger);
+  color: var(--sp-color-state-danger);
+}
+
+.sp-button--danger:hover:not(:disabled) {
+  background: var(--sp-color-bg-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sp-button {
+    transition: none;
+  }
+
+  .sp-button:active:not(:disabled) {
+    transform: none;
+  }
+}
