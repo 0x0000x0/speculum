@@ -583,15 +583,14 @@ fn pid_alive(pid: u32) -> bool {
 unsafe fn libc_kill_probe(pid: u32) -> bool {
     extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
-        fn __errno_location() -> *mut i32;
     }
     let r = kill(pid as i32, 0);
     if r == 0 {
         return true;
     }
-    let errno = unsafe { *__errno_location() };
-    // EPERM (1) means the process exists but we cannot signal it.
-    errno == 1
+    // Read errno portably (glibc's `__errno_location` does not exist on macOS).
+    // EPERM (1 on Linux and macOS) means the process exists but we cannot signal it.
+    std::io::Error::last_os_error().raw_os_error() == Some(1)
 }
 
 #[cfg(not(unix))]
