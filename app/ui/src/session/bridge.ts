@@ -1498,3 +1498,23 @@ export async function bridgeSetLanding(
     targetDiagramId,
   });
 }
+
+// ---------------------------------------------------------------------------
+// File menu (Open / Save As). The desktop app shows native dialogs and then
+// reloads the page on the chosen file; the browser mock only records calls.
+// ---------------------------------------------------------------------------
+
+function mockFileOp(op: "open" | "saveAs"): void {
+  const w = window as unknown as { __specFileOps?: string[] };
+  (w.__specFileOps ??= []).push(op);
+}
+
+export async function bridgeFileOpen(): Promise<void> {
+  if (!isTauri()) return mockFileOp("open");
+  await invoke("file_open");
+}
+
+export async function bridgeFileSaveAs(): Promise<void> {
+  if (!isTauri()) return mockFileOp("saveAs");
+  await invoke("file_save_as");
+}

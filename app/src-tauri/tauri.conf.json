@@ -26,13 +26,26 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "speculum"
+        ],
+        "name": "Speculum file",
+        "description": "Speculum diagram file",
+        "role": "Editor",
+        "mimeType": "application/x-speculum"
+      }
     ]
   }
 }

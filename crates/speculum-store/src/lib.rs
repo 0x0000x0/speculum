@@ -2,6 +2,7 @@ pub mod atomic;
 pub mod error;
 pub mod format;
 pub mod journal;
+pub mod launch;
 pub mod paths;
 pub mod session;
 pub mod snapshot;

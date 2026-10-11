@@ -3,9 +3,11 @@
 use speculum_core::{Command, Document};
 use speculum_store::{OpenOutcome, PendingSession, Session};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 // ---------------------------------------------------------------------------
 // State
@@ -14,6 +16,11 @@ use tauri::Manager;
 struct StoreState {
     live: Arc<Mutex<Option<Session>>>,
     pending: Arc<Mutex<Option<PendingSession>>>,
+    /// The document this window shows (set at launch, by Open, Save As,
+    /// drag-drop or a second launch). `startup` opens it.
+    current: Arc<Mutex<Option<PathBuf>>>,
+    /// A file dialog is up (menu accelerator + in-page shortcut can both fire).
+    dialog_busy: Arc<AtomicBool>,
 }
 
 impl Default for StoreState {
@@ -21,6 +28,8 @@ impl Default for StoreState {
         Self {
             live: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(None)),
+            current: Arc::new(Mutex::new(None)),
+            dialog_busy: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -84,10 +93,26 @@ struct StateDto {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Launch order: path set by a file action / argv > SPECULUM_FILE env >
+/// last-opened file > Default.speculum in the app data dir.
 fn resolve_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let state = app.state::<StoreState>();
+    if let Some(p) = state
+        .current
+        .lock()
+        .map_err(|e| format!("state lock: {e}"))?
+        .clone()
+    {
+        return Ok(p);
+    }
     if let Ok(env_path) = std::env::var("SPECULUM_FILE") {
         if !env_path.trim().is_empty() {
             return Ok(PathBuf::from(env_path));
+        }
+    }
+    if let Ok(cfg) = app.path().app_config_dir() {
+        if let Some(p) = speculum_store::launch::read_last_file(&cfg) {
+            return Ok(p);
         }
     }
     let dir = app
@@ -96,6 +121,177 @@ fn resolve_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create app data dir: {e}"))?;
     Ok(dir.join("Default.speculum"))
+}
+
+/// After a document opened: remember it, show its name in the title bar.
+fn note_opened(app: &tauri::AppHandle, path: &Path) {
+    if let Ok(mut cur) = app.state::<StoreState>().current.lock() {
+        *cur = Some(path.to_path_buf());
+    }
+    if let Ok(cfg) = app.path().app_config_dir() {
+        let _ = speculum_store::launch::write_last_file(&cfg, path);
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_title(&format!("{} \u{2014} Speculum", doc_name_for(path)));
+    }
+}
+
+fn close_live(app: &tauri::AppHandle) {
+    let state = app.state::<StoreState>();
+    let taken = state.live.lock().map(|mut g| g.take()).unwrap_or(None);
+    if let Some(session) = taken {
+        // Best-effort save + unlock.
+        let _ = session.close();
+    }
+    if let Ok(mut p) = state.pending.lock() {
+        *p = None;
+    };
+}
+
+fn show_error(app: &tauri::AppHandle, msg: String) {
+    eprintln!("speculum: {msg}");
+    app.dialog()
+        .message(msg)
+        .title("Speculum")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+/// Switch this window to another document: check it reads, save + close the
+/// current one, then reload the page so the UI starts fresh on the new file.
+fn switch_to(app: &tauri::AppHandle, path: PathBuf) {
+    let path = std::path::absolute(&path).unwrap_or(path);
+    focus_main(app);
+    if !speculum_store::launch::is_speculum_path(&path) {
+        show_error(app, format!("Not a Speculum file: {}", path.display()));
+        return;
+    }
+    let same = app
+        .state::<StoreState>()
+        .current
+        .lock()
+        .map(|c| c.as_deref() == Some(path.as_path()))
+        .unwrap_or(false);
+    if same && app.state::<StoreState>().live.lock().map(|g| g.is_some()).unwrap_or(false) {
+        return;
+    }
+    if path.exists() {
+        let ok = std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| speculum_store::from_bytes(&b).map(|_| ()).map_err(|e| e.to_string()));
+        if let Err(e) = ok {
+            show_error(app, format!("Could not open {}:\n{e}", path.display()));
+            return;
+        }
+    }
+    close_live(app);
+    if let Ok(mut cur) = app.state::<StoreState>().current.lock() {
+        *cur = Some(path.clone());
+    }
+    let _ = app.emit("speculum://file-switched", path.to_string_lossy().into_owned());
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval("window.location.reload()");
+    }
+}
+
+fn focus_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// File > Open: pick a .speculum file and switch to it.
+fn open_dialog(app: &tauri::AppHandle) {
+    let busy = app.state::<StoreState>().dialog_busy.clone();
+    if busy.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let handle = app.clone();
+    let mut d = app
+        .dialog()
+        .file()
+        .set_title("Open Speculum file")
+        .add_filter("Speculum file", &[speculum_store::launch::EXTENSION]);
+    if let Some(dir) = current_dir(app) {
+        d = d.set_directory(dir);
+    }
+    d.pick_file(move |picked| {
+        busy.store(false, Ordering::SeqCst);
+        if let Some(fp) = picked.and_then(|f| f.into_path().ok()) {
+            switch_to(&handle, fp);
+        }
+    });
+}
+
+/// File > Save As: write the current document to a new .speculum file and
+/// continue working in the new file.
+fn save_as_dialog(app: &tauri::AppHandle) {
+    let busy = app.state::<StoreState>().dialog_busy.clone();
+    if busy.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let handle = app.clone();
+    let mut d = app
+        .dialog()
+        .file()
+        .set_title("Save Speculum file as")
+        .add_filter("Speculum file", &[speculum_store::launch::EXTENSION]);
+    if let Some(dir) = current_dir(app) {
+        d = d.set_directory(dir);
+    }
+    if let Some(cur) = current_path(app) {
+        d = d.set_file_name(format!("{} copy.{}", doc_name_for(&cur), speculum_store::launch::EXTENSION));
+    }
+    d.save_file(move |picked| {
+        busy.store(false, Ordering::SeqCst);
+        if let Some(fp) = picked.and_then(|f| f.into_path().ok()) {
+            let target = speculum_store::launch::with_speculum_extension(&fp);
+            if let Err(e) = save_copy_to(&handle, &target) {
+                show_error(&handle, format!("Could not save {}:\n{e}", target.display()));
+                return;
+            }
+            switch_to(&handle, target);
+        }
+    });
+}
+
+fn current_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.state::<StoreState>().current.lock().ok().and_then(|c| c.clone())
+}
+
+fn current_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    current_path(app).and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
+/// Save the live document, then write a copy (renamed after the new file)
+/// to `target`.
+fn save_copy_to(app: &tauri::AppHandle, target: &Path) -> Result<(), String> {
+    if current_path(app).as_deref() == Some(target) {
+        return Err("that is the file already open".to_string());
+    }
+    let state = app.state::<StoreState>();
+    let mut guard = state.live.lock().map_err(|e| format!("state lock: {e}"))?;
+    let session = guard.as_mut().ok_or_else(|| "no open document".to_string())?;
+    session.save_now().map_err(|e| e.to_string())?;
+    let mut doc = session.doc().clone();
+    doc.meta.name = doc_name_for(target);
+    speculum_store::atomic_write(target, &speculum_store::to_bytes(&doc)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn file_open(app: tauri::AppHandle) {
+    open_dialog(&app);
+}
+
+#[tauri::command]
+fn file_save_as(app: tauri::AppHandle) {
+    save_as_dialog(&app);
+}
+
+#[tauri::command]
+fn current_file(app: tauri::AppHandle) -> Option<String> {
+    current_path(&app).map(|p| p.to_string_lossy().into_owned())
 }
 
 fn doc_name_for(path: &Path) -> String {
@@ -112,6 +308,15 @@ fn doc_name_for(path: &Path) -> String {
 #[tauri::command]
 fn startup(app: tauri::AppHandle) -> Result<StartupDto, String> {
     let path = resolve_path(&app)?;
+    // A page reload (file switch) calls startup again: release the old session.
+    close_live(&app);
+    let dto = open_document(&app, &path)?;
+    note_opened(&app, &path);
+    Ok(dto)
+}
+
+fn open_document(app: &tauri::AppHandle, path: &Path) -> Result<StartupDto, String> {
+    let path = path.to_path_buf();
     let state = app.state::<StoreState>();
 
     if !path.exists() {
@@ -751,11 +956,68 @@ fn app_info() -> AppInfo {
     }
 }
 
+fn handle_argv(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) {
+    focus_main(app);
+    let cwd = PathBuf::from(cwd);
+    if let Some(p) = speculum_store::launch::path_from_args(&argv, Some(&cwd)) {
+        switch_to(app, p);
+    }
+}
+
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let open = MenuItemBuilder::with_id("file-open", "Open\u{2026}")
+        .accelerator("CmdOrCtrl+O")
+        .build(app)?;
+    let save_as = MenuItemBuilder::with_id("file-save-as", "Save As\u{2026}")
+        .accelerator("CmdOrCtrl+Shift+S")
+        .build(app)?;
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&open)
+        .item(&save_as)
+        .separator()
+        .quit()
+        .build()?;
+    let mut menu = MenuBuilder::new(app);
+    #[cfg(target_os = "macos")]
+    {
+        let app_menu = SubmenuBuilder::new(app, "Speculum").about(None).separator().quit().build()?;
+        let edit = SubmenuBuilder::new(app, "Edit").cut().copy().paste().select_all().build()?;
+        menu = menu.item(&app_menu).item(&file).item(&edit);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        menu = menu.item(&file);
+    }
+    menu.build()
+}
+
 fn main() {
     let store_state = StoreState::default();
-    tauri::Builder::default()
+    // First launch: a document passed on the command line (file association,
+    // "Open with", or a shell).
+    let cwd = std::env::current_dir().ok();
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(p) = speculum_store::launch::path_from_args(&args, cwd.as_deref()) {
+        if let Ok(mut cur) = store_state.current.lock() {
+            *cur = Some(p);
+        }
+    }
+    let app = tauri::Builder::default()
+        // Must be the first plugin: a second launch hands its argv here and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            handle_argv(app, argv, cwd);
+        }))
+        .plugin(tauri_plugin_dialog::init())
         .manage(store_state)
         .setup(|app| {
+            let menu = build_menu(app.handle())?;
+            app.set_menu(menu)?;
+            app.on_menu_event(|app, event| match event.id().as_ref() {
+                "file-open" => open_dialog(app),
+                "file-save-as" => save_as_dialog(app),
+                _ => {}
+            });
             // Background autosave tick every 200 ms.
             let state = app.state::<StoreState>();
             let live = state.live.clone();
@@ -771,19 +1033,19 @@ fn main() {
             });
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let state = window.state::<StoreState>();
-                let taken = state
-                    .live
-                    .lock()
-                    .map(|mut guard| guard.take())
-                    .unwrap_or(None);
-                if let Some(session) = taken {
-                    // Best-effort save + unlock on close.
-                    let _ = session.close();
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { .. } => {
+                close_live(window.app_handle());
+            }
+            tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                if let Some(p) = paths
+                    .iter()
+                    .find(|p| speculum_store::launch::is_speculum_path(p))
+                {
+                    switch_to(window.app_handle(), p.clone());
                 }
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -802,8 +1064,20 @@ fn main() {
             ensure_layout,
             zoom_into,
             diagram_parent,
-            set_landing
+            set_landing,
+            file_open,
+            file_save_as,
+            current_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|_app, _event| {
+        // macOS delivers double-clicked documents as an Opened event.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Opened { urls } = &_event {
+            if let Some(p) = urls.iter().find_map(|u| u.to_file_path().ok()) {
+                switch_to(_app, p);
+            }
+        }
+    });
 }

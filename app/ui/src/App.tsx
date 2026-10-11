@@ -18,7 +18,7 @@ import {
   undoModel,
   useModel,
 } from "./model/store";
-import { bridgeDispatch } from "./session/bridge";
+import { bridgeDispatch, bridgeFileOpen, bridgeFileSaveAs } from "./session/bridge";
 import { applySessionCounts } from "./session/SessionProvider";
 import "./App.css";
 
@@ -72,6 +72,14 @@ function Shell() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         togglePanel();
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "o") {
+        // File > Open (the native menu has the same accelerator; the backend
+        // ignores a second request while a dialog is up).
+        e.preventDefault();
+        void bridgeFileOpen();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void bridgeFileSaveAs();
       }
     };
     window.addEventListener("keydown", onKey);

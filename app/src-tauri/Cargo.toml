@@ -18,3 +18,5 @@ serde_json = { workspace = true }
 speculum-core = { path = "../../crates/speculum-core" }
 speculum-layout = { path = "../../crates/speculum-layout" }
 speculum-store = { path = "../../crates/speculum-store" }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
