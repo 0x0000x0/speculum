@@ -4,6 +4,7 @@
   color-scheme: dark;
   --sp-color-bg-chrome: #0E1116;
   --sp-color-bg-canvas: #131720;
+  --sp-color-bg-canvas-dot: #3B4A63;
   --sp-color-bg-raised: #1A212E;
   --sp-color-bg-hover: rgba(255,255,255,0.06);
   --sp-color-border-subtle: #2A3344;
@@ -65,6 +66,7 @@
   color-scheme: light;
   --sp-color-bg-chrome: #F7F7F8;
   --sp-color-bg-canvas: #FFFFFF;
+  --sp-color-bg-canvas-dot: #C9D0DB;
   --sp-color-bg-raised: #FFFFFF;
   --sp-color-bg-hover: rgba(17,24,39,0.05);
   --sp-color-border-subtle: #E5E7EB;
@@ -170,6 +172,7 @@
   --sp-motion-fast: 120ms;
   --sp-motion-base: 200ms;
   --sp-motion-drill: 240ms;
+  --sp-motion-tooltip-delay: 500ms;
   --sp-motion-ease: cubic-bezier(0.22,1,0.36,1);
   --sp-dim-unrelated: 0.28;
 }

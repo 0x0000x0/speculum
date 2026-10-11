@@ -2,12 +2,85 @@ use crate::model::{Document, Flow, FlowStep, Id};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Wire contract for an edge endpoint.
+/// Serializes ALWAYS as an object: `{"box":"<id>"}` or `{"frame":true}`.
+/// Deserializes both object forms plus the legacy bare `"frame"` string.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Endpoint {
     Box(Id),
     #[default]
     Frame,
+}
+
+impl Serialize for Endpoint {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        match self {
+            Endpoint::Box(id) => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry("box", id)?;
+                m.end()
+            }
+            Endpoint::Frame => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry("frame", &true)?;
+                m.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Endpoint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EndpointVisitor;
+        impl<'de> serde::de::Visitor<'de> for EndpointVisitor {
+            type Value = Endpoint;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an endpoint object {\"box\": id} or {\"frame\": true}, or the legacy string \"frame\"")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Endpoint, E> {
+                if v == "frame" {
+                    Ok(Endpoint::Frame)
+                } else {
+                    Err(E::unknown_variant(v, &["frame"]))
+                }
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Endpoint, E> {
+                self.visit_str(&v)
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Endpoint, A::Error> {
+                use serde::de::Error;
+                let mut boxed: Option<Id> = None;
+                let mut frame = false;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "box" => {
+                            if boxed.is_some() {
+                                return Err(A::Error::duplicate_field("box"));
+                            }
+                            boxed = Some(map.next_value()?);
+                        }
+                        "frame" => {
+                            // Accept `true` (current contract); ignore the value.
+                            let _ignored: serde::de::IgnoredAny = map.next_value()?;
+                            frame = true;
+                        }
+                        other => {
+                            return Err(A::Error::unknown_field(other, &["box", "frame"]));
+                        }
+                    }
+                }
+                if let Some(id) = boxed {
+                    return Ok(Endpoint::Box(id));
+                }
+                if frame {
+                    return Ok(Endpoint::Frame);
+                }
+                Err(A::Error::missing_field("box or frame"))
+            }
+        }
+        deserializer.deserialize_any(EndpointVisitor)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -415,5 +488,71 @@ fn scope_depth(doc: &Document, diagram_id: &Id) -> i64 {
     match &diagram.scope_object_id {
         None => -1,
         Some(s) => doc.model.depth(s) as i64,
+    }
+}
+
+#[cfg(test)]
+mod endpoint_wire_tests {
+    use super::Endpoint;
+
+    #[test]
+    fn box_serializes_as_object() {
+        let e = Endpoint::Box("abc".to_string());
+        assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"box":"abc"}"#);
+    }
+
+    #[test]
+    fn frame_serializes_as_object() {
+        let e = Endpoint::Frame;
+        assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"frame":true}"#);
+    }
+
+    #[test]
+    fn legacy_bare_frame_string_still_deserializes() {
+        let e: Endpoint = serde_json::from_str(r#""frame""#).unwrap();
+        assert_eq!(e, Endpoint::Frame);
+    }
+
+    #[test]
+    fn object_forms_deserialize() {
+        let b: Endpoint = serde_json::from_str(r#"{"box":"abc"}"#).unwrap();
+        assert_eq!(b, Endpoint::Box("abc".to_string()));
+        let f: Endpoint = serde_json::from_str(r#"{"frame":true}"#).unwrap();
+        assert_eq!(f, Endpoint::Frame);
+    }
+
+    #[test]
+    fn view_edge_with_frame_round_trips() {
+        let edge = super::ViewEdge {
+            from: Endpoint::Frame,
+            to: Endpoint::Box("obj-x".to_string()),
+            connection_ids: vec!["c1".to_string()],
+            lower: false,
+            explicit: true,
+            bidirectional: false,
+        };
+        let json = serde_json::to_string(&edge).unwrap();
+        assert!(json.contains(r#""from":{"frame":true}"#), "{json}");
+        assert!(json.contains(r#""to":{"box":"obj-x"}"#), "{json}");
+        let back: super::ViewEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, edge);
+        // Legacy payload with a bare "frame" string still loads.
+        let legacy = r#"{"from":"frame","to":{"box":"obj-x"},"connectionIds":["c1"],"lower":false,"explicit":true,"bidirectional":false}"#;
+        let back2: super::ViewEdge = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back2, edge);
+    }
+
+    #[test]
+    fn step_location_with_frame_round_trips() {
+        let loc = super::StepLocation {
+            diagram_id: "dg-1".to_string(),
+            from: Some(Endpoint::Frame),
+            to: Some(Endpoint::Box("obj-x".to_string())),
+            object_box: None,
+        };
+        let json = serde_json::to_string(&loc).unwrap();
+        assert!(json.contains(r#""from":{"frame":true}"#), "{json}");
+        let back: super::StepLocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, loc);
     }
 }

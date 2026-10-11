@@ -41,6 +41,7 @@ const defaultCounts: SessionCounts = {
   tags: 0,
   diagrams: 0,
   flows: 0,
+  rev: 0,
 };
 
 const SessionContext = createContext<SessionContextValue>({
@@ -57,6 +58,29 @@ const SessionContext = createContext<SessionContextValue>({
   addSampleBox: () => Promise.resolve(),
 });
 
+// --- Single place that applies backend counts to session state ----------------
+// Every mutation path (seed_sample, dispatch, undo, redo, add_sample_box,
+// recovery_resolve, ensure_layout, delete-from-model, quick-add, toast undo)
+// funnels through `applySessionCounts` so the status bar / side panel cannot
+// drift from the backend. The model store calls this after each bridge
+// mutation; SessionProvider wires the real setter on mount.
+let lastCounts: SessionCounts = defaultCounts;
+let countsApplier: ((next: SessionCounts) => void) | null = null;
+
+/** Latest counts applied via {@link applySessionCounts} (mock or Tauri). */
+export function getLastSessionCounts(): SessionCounts {
+  return lastCounts;
+}
+
+/**
+ * Apply counts returned by ANY bridge mutation to the session state.
+ * This is the single funnel — do not call setCounts directly elsewhere.
+ */
+export function applySessionCounts(next: SessionCounts): void {
+  lastCounts = next;
+  countsApplier?.(next);
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<SessionStatusKind>("loading");
@@ -67,12 +91,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [name, setName] = useState("");
   const mounted = useRef(true);
 
+  // The single funnel writes through this setter (and the shared copy
+  // read by window.__speculum.getState()).
+  const applyCounts = useCallback((next: SessionCounts) => {
+    lastCounts = next;
+    if (mounted.current) setCounts(next);
+  }, []);
+
+  useEffect(() => {
+    countsApplier = applyCounts;
+    return () => {
+      if (countsApplier === applyCounts) countsApplier = null;
+    };
+  }, [applyCounts]);
+
   useEffect(() => {
     mounted.current = true;
     bridgeStartup()
       .then((res) => {
         if (!mounted.current) return;
-        setCounts(res.counts);
+        applyCounts(res.counts);
         if (res.status === "needs_recovery" && res.recovery) {
           setStatus("needs_recovery");
           setRecovery(res.recovery);
@@ -99,7 +137,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       bridgeGetState()
         .then((s) => {
           if (!mounted.current) return;
-          setCounts(s.counts);
+          applyCounts(s.counts);
           setDirty(s.dirty);
           setLastSavedMs(s.lastSavedMs);
           setName(s.name);
@@ -107,43 +145,43 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
     }, 1000);
     return () => window.clearInterval(t);
-  }, [loading, status]);
+  }, [loading, status, applyCounts]);
 
   const resolveRecovery = useCallback(
     async (choice: "restore" | "discard") => {
       const next = await bridgeResolveRecovery(choice);
       if (!mounted.current) return;
-      setCounts(next);
+      applyCounts(next);
       setRecovery(null);
       setStatus("clean");
       setDirty(choice === "restore");
     },
-    [],
+    [applyCounts],
   );
 
   const undo = useCallback(async () => {
     const next = await bridgeUndo().catch(() => null);
     if (next && mounted.current) {
-      setCounts(next);
+      applyCounts(next);
       setDirty(true);
     }
-  }, []);
+  }, [applyCounts]);
 
   const redo = useCallback(async () => {
     const next = await bridgeRedo().catch(() => null);
     if (next && mounted.current) {
-      setCounts(next);
+      applyCounts(next);
       setDirty(true);
     }
-  }, []);
+  }, [applyCounts]);
 
   const addSampleBox = useCallback(async () => {
     const next = await bridgeAddSampleBox().catch(() => null);
     if (next && mounted.current) {
-      setCounts(next);
+      applyCounts(next);
       setDirty(true);
     }
-  }, []);
+  }, [applyCounts]);
 
   const value = useMemo<SessionContextValue>(
     () => ({

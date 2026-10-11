@@ -52,6 +52,12 @@ impl History {
     }
 
     pub fn dispatch(&mut self, doc: &mut Document, cmd: Command, now_ms: u64) -> Result<(), CoreError> {
+        // Camera moves are never undo steps (like Figma): apply to the
+        // document but do not push onto the undo stack and do not clear redo.
+        if matches!(cmd, Command::SetViewport { .. }) {
+            cmd.apply(doc)?;
+            return Ok(());
+        }
         let merge_key = merge_key_for(&cmd);
         // Clone cmd for forward storage (we need forward after apply consumes it).
         let forward = cmd.clone();
@@ -177,7 +183,7 @@ fn merge_key_for(cmd: &Command) -> Option<String> {
                 None
             }
         }
-        Command::PatchDiagram { id, name, description, order, pinned, domain_id } => {
+        Command::PatchDiagram { id, name, description, order, pinned, domain_id, auto_placed } => {
             let mut count = 0;
             let mut field = "";
             if name.is_some() { count += 1; field = "name"; }
@@ -185,6 +191,7 @@ fn merge_key_for(cmd: &Command) -> Option<String> {
             if order.is_some() { count += 1; }
             if pinned.is_some() { count += 1; }
             if domain_id.is_some() { count += 1; }
+            if auto_placed.is_some() { count += 1; }
             if count == 1 && (field == "name" || field == "description") {
                 Some(format!("patchDiagram:{id}:{field}"))
             } else {

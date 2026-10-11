@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::command::Command;
 use crate::model::{Document, Id, Model, ObjectKind, StepKind};
 
 /// Severity of an issue.
@@ -214,6 +215,20 @@ fn validate_inner(
                         "missing-diagram-box",
                         format!("diagram '{}' has missing box '{}'", d.id, box_id),
                         vec![d.id.clone(), box_id.clone()],
+                    ));
+                }
+            }
+            // The scope object must not be a box on its own diagram; the UI
+            // draws the scope FRAME instead (M5).
+            if let Some(scope) = &d.scope_object_id {
+                if d.boxes.contains_key(scope) {
+                    out.push(warn(
+                        "scope-object-boxed",
+                        format!(
+                            "scope object boxed on its own diagram: object '{}' on diagram '{}'",
+                            scope, d.id
+                        ),
+                        vec![d.id.clone(), scope.clone()],
                     ));
                 }
             }
@@ -687,6 +702,19 @@ fn repair_inner(
                         vec![did.clone()],
                     ));
                 }
+                // One-off M5 migration: the scope object is not a box on its
+                // own diagram (the UI draws the scope FRAME instead).
+                if let Some(scope) = d.scope_object_id.clone() {
+                    if d.boxes.remove(&scope).is_some() {
+                        fixed.push(warn(
+                            "scope-object-boxed",
+                            format!(
+                                "removed scope object '{scope}' from its own diagram '{did}'"
+                            ),
+                            vec![did.clone(), scope],
+                        ));
+                    }
+                }
                 let before_c = d.connections.len();
                 d.connections
                     .retain(|cid, _| model.connections.contains_key(cid));
@@ -777,6 +805,28 @@ fn prune_steps(
     *steps = kept;
 }
 
+/// Build one `RemoveFromDiagram` per diagram that currently boxes its own
+/// scope object, so `Session::open` / `ensure_layout` can repair old files
+/// as a normal undoable command. Sorted by (diagram, object) for
+/// determinism. Empty when there is nothing to repair.
+pub fn scope_box_removal_commands(doc: &Document) -> Vec<Command> {
+    let mut out: Vec<Command> = Vec::new();
+    let mut dids: Vec<&Id> = doc.diagrams.keys().collect();
+    dids.sort();
+    for did in dids {
+        let d = &doc.diagrams[did];
+        if let Some(scope) = &d.scope_object_id {
+            if d.boxes.contains_key(scope) {
+                out.push(Command::RemoveFromDiagram {
+                    diagram_id: (*did).clone(),
+                    object_id: scope.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Convenience: all issue codes currently produced.
 pub fn all_codes() -> Vec<&'static str> {
     vec![
@@ -799,6 +849,7 @@ pub fn all_codes() -> Vec<&'static str> {
         "missing-diagram-box",
         "missing-diagram-connection",
         "missing-landing",
+        "scope-object-boxed",
     ]
 }
 

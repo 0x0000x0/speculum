@@ -1,0 +1,47 @@
+/* Error boundary fallback: token variables only (theme-aware). */
+
+.error-boundary {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-space-6);
+  background: var(--sp-color-bg-canvas);
+  color: var(--sp-color-text-primary);
+}
+
+.error-boundary__card {
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-popover);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-4);
+  max-width: 420px;
+  text-align: center;
+}
+
+.error-boundary__title {
+  font-size: var(--sp-type-view-title-size);
+  font-weight: var(--sp-type-view-title-weight);
+  line-height: var(--sp-type-view-title-line);
+  margin-bottom: var(--sp-space-2);
+}
+
+.error-boundary__message {
+  font-size: var(--sp-type-body-sm-size);
+  color: var(--sp-color-text-secondary);
+  margin-bottom: var(--sp-space-4);
+  overflow-wrap: anywhere;
+}
+
+.error-boundary__button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-pill);
+  background: var(--sp-color-accent-primary);
+  color: var(--sp-color-accent-on);
+  padding: var(--sp-space-1) var(--sp-space-4);
+}

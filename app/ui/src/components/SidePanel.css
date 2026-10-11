@@ -123,6 +123,31 @@
   color: var(--sp-color-text-tertiary);
 }
 
+.sidepanel__fields {
+  margin: var(--sp-space-4) 0 0;
+}
+
+.sidepanel__field-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-space-3);
+  padding: var(--sp-space-1) 0;
+  border-top: 1px solid var(--sp-color-border-subtle);
+  font-size: var(--sp-type-body-size);
+}
+
+.sidepanel__field-row dt {
+  flex: 0 0 auto;
+  color: var(--sp-color-text-secondary);
+}
+
+.sidepanel__field-row dd {
+  margin: 0;
+  color: var(--sp-color-text-primary);
+  text-align: right;
+}
+
 .sidepanel__counts {
   margin: 0;
 }

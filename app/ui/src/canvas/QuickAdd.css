@@ -1,0 +1,117 @@
+/* Quick-add popover. Token variables only. */
+
+.quick-add {
+  position: fixed;
+  z-index: 50;
+  width: 280px;
+  box-sizing: border-box;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-popover);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-2);
+}
+
+.quick-add__types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-space-1);
+}
+
+.quick-add__type {
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-pill);
+  background: transparent;
+  color: var(--sp-color-text-secondary);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-caption-size);
+  padding: 2px var(--sp-space-2);
+  cursor: pointer;
+}
+
+.quick-add__type:hover {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.quick-add__type--active {
+  border-color: var(--sp-color-accent-primary);
+  color: var(--sp-color-accent-primary);
+}
+
+.quick-add__name {
+  height: 30px;
+  box-sizing: border-box;
+  border: 1px solid var(--sp-color-border-strong);
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-color-bg-chrome);
+  color: var(--sp-color-text-primary);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-size);
+  padding: 0 var(--sp-space-2);
+  outline: none;
+}
+
+.quick-add__name:focus {
+  border-color: var(--sp-color-focus-ring);
+}
+
+.quick-add__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.quick-add__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-2);
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--sp-radius-control);
+  background: transparent;
+  color: var(--sp-color-text-primary);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-sm-size);
+  padding: var(--sp-space-1) var(--sp-space-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.quick-add__item:hover {
+  background: var(--sp-color-bg-hover);
+}
+
+.quick-add__item-kind {
+  flex: 0 0 auto;
+  font-size: var(--sp-type-caption-size);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sp-color-text-tertiary);
+}
+
+.quick-add__item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-add__create {
+  border: 1px solid var(--sp-color-accent-primary);
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-color-accent-primary);
+  color: var(--sp-color-accent-on);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-sm-size);
+  font-weight: 600;
+  padding: var(--sp-space-1) var(--sp-space-2);
+  cursor: pointer;
+}

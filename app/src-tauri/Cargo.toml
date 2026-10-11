@@ -9,11 +9,12 @@ name = "speculum-app"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = "2"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 speculum-core = { path = "../../crates/speculum-core" }
+speculum-layout = { path = "../../crates/speculum-layout" }
 speculum-store = { path = "../../crates/speculum-store" }

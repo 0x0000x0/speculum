@@ -166,6 +166,8 @@ pub enum Command {
         pinned: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         domain_id: Option<Option<Id>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto_placed: Option<bool>,
     },
     AddToDiagram {
         diagram_id: Id,
@@ -275,7 +277,7 @@ pub enum Command {
         step_id: Id,
         path_id: Id,
     },
-    Batch(Vec<Command>),
+    Batch { commands: Vec<Command> },
 }
 
 // ---------------------------------------------------------------------------
@@ -735,7 +737,7 @@ impl Command {
                         step,
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::PatchObject { id, patch } => {
                 let obj = doc
@@ -910,7 +912,7 @@ impl Command {
                         step,
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::PatchConnection { id, patch } => {
                 // validate endpoints/via if changed
@@ -1054,7 +1056,7 @@ impl Command {
                         },
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::PatchTag {
                 id,
@@ -1174,7 +1176,7 @@ impl Command {
                         },
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::CreateDomain { domain } => {
                 if domain.id.is_empty() {
@@ -1237,9 +1239,10 @@ impl Command {
                         order: None,
                         pinned: None,
                         domain_id: Some(old),
+                        auto_placed: None,
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::CreateDiagram { diagram } => {
                 if diagram.id.is_empty() {
@@ -1320,7 +1323,7 @@ impl Command {
                         diagram_id: Some(old),
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::PatchDiagram {
                 id,
@@ -1329,6 +1332,7 @@ impl Command {
                 order,
                 pinned,
                 domain_id,
+                auto_placed,
             } => {
                 if let Some(Some(did)) = &domain_id {
                     if !doc.model.domains.contains_key(did) {
@@ -1340,6 +1344,7 @@ impl Command {
                 let touched_order = order.is_some();
                 let touched_pinned = pinned.is_some();
                 let touched_domain = domain_id.is_some();
+                let touched_auto = auto_placed.is_some();
                 let d = doc
                     .diagrams
                     .get_mut(&id)
@@ -1349,6 +1354,7 @@ impl Command {
                 let old_order = d.order;
                 let old_pinned = d.pinned;
                 let old_domain = d.domain_id.clone();
+                let old_auto = d.auto_placed;
                 if let Some(v) = name {
                     d.name = v;
                 }
@@ -1364,6 +1370,9 @@ impl Command {
                 if let Some(v) = domain_id {
                     d.domain_id = v;
                 }
+                if let Some(v) = auto_placed {
+                    d.auto_placed = v;
+                }
                 Ok(Command::PatchDiagram {
                     id,
                     name: if touched_name { Some(old_name) } else { None },
@@ -1371,6 +1380,7 @@ impl Command {
                     order: if touched_order { Some(old_order) } else { None },
                     pinned: if touched_pinned { Some(old_pinned) } else { None },
                     domain_id: if touched_domain { Some(old_domain) } else { None },
+                    auto_placed: if touched_auto { Some(old_auto) } else { None },
                 })
             }
             Command::AddToDiagram {
@@ -1378,11 +1388,19 @@ impl Command {
                 object_id,
                 rect,
             } => {
-                if !doc.diagrams.contains_key(&diagram_id) {
-                    return Err(CoreError::NotFound(diagram_id));
-                }
+                let d = doc
+                    .diagrams
+                    .get(&diagram_id)
+                    .ok_or(CoreError::NotFound(diagram_id.clone()))?;
                 if !doc.model.objects.contains_key(&object_id) {
                     return Err(CoreError::NotFound(object_id));
+                }
+                // A diagram scoped to object X must not show X itself as a
+                // box; the UI draws the scope FRAME instead (M5).
+                if d.scope_object_id.as_ref() == Some(&object_id) {
+                    return Err(CoreError::Invalid(format!(
+                        "cannot add scope object '{object_id}' to its own diagram '{diagram_id}'"
+                    )));
                 }
                 let old_boxes = doc
                     .diagrams
@@ -1423,16 +1441,27 @@ impl Command {
                         }
                     }
                 }
+                // Undo for the scope object itself cannot be AddToDiagram
+                // (rejected since M5); restore the whole box map instead.
+                let is_scope = d.scope_object_id.as_ref() == Some(&object_id);
+                let old_boxes = d.boxes.clone();
                 if let Some(dd) = doc.diagrams.get_mut(&diagram_id) {
                     dd.boxes.remove(&object_id);
                     for (cid, _) in &dropped {
                         dd.connections.remove(cid);
                     }
                 }
-                let mut inv: Vec<Command> = vec![Command::AddToDiagram {
-                    diagram_id: diagram_id.clone(),
-                    object_id: object_id.clone(),
-                    rect,
+                let mut inv: Vec<Command> = vec![if is_scope {
+                    Command::ApplyLayout {
+                        diagram_id: diagram_id.clone(),
+                        boxes: old_boxes,
+                    }
+                } else {
+                    Command::AddToDiagram {
+                        diagram_id: diagram_id.clone(),
+                        object_id: object_id.clone(),
+                        rect,
+                    }
                 }];
                 dropped.sort_by(|a, b| a.0.cmp(&b.0));
                 for (cid, layout) in dropped {
@@ -1442,7 +1471,7 @@ impl Command {
                         layout,
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::MoveBoxes { diagram_id, moves } => {
                 let d = doc
@@ -1637,7 +1666,7 @@ impl Command {
                         step,
                     });
                 }
-                Ok(Command::Batch(inv))
+                Ok(Command::Batch { commands: inv })
             }
             Command::PatchFlow {
                 id,
@@ -1988,18 +2017,20 @@ impl Command {
                 if inv.len() == 1 {
                     Ok(inv.into_iter().next().unwrap())
                 } else {
-                    Ok(Command::Batch(inv))
+                    Ok(Command::Batch { commands: inv })
                 }
             }
-            Command::Batch(cmds) => {
+            Command::Batch { commands } => {
                 let mut tmp = doc.clone();
                 let mut inverses: Vec<Command> = Vec::new();
-                for c in cmds {
+                for c in commands {
                     inverses.push(c.apply(&mut tmp)?);
                 }
                 *doc = tmp;
                 inverses.reverse();
-                Ok(Command::Batch(inverses))
+                Ok(Command::Batch {
+                    commands: inverses,
+                })
             }
         }
     }

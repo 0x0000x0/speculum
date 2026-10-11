@@ -4,7 +4,7 @@ import Button from "./Button";
 
 interface ModalProps {
   title: string;
-  body: string;
+  body: React.ReactNode;
   onClose: () => void;
   actions?: React.ReactNode;
 }
@@ -41,7 +41,7 @@ export default function Modal({ title, body, onClose, actions }: ModalProps) {
         tabIndex={-1}
       >
         <h2 className="sp-modal__title">{title}</h2>
-        <p className="sp-modal__body">{body}</p>
+        <div className="sp-modal__body">{body}</div>
         <div className="sp-modal__actions">
           {actions ?? (
             <Button variant="primary" onClick={onClose}>

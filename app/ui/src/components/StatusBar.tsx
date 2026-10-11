@@ -14,10 +14,14 @@ export default function StatusBar({ zoom }: { zoom: number }) {
         />
         {status.savedLabel}
       </span>
-      <span className="statusbar__zoom" aria-label={`Zoom ${pct}`}>
+      <span
+        className="statusbar__zoom"
+        data-testid="status-zoom"
+        aria-label={`Zoom ${pct}`}
+      >
         {pct}
       </span>
-      <span className="statusbar__counts">
+      <span className="statusbar__counts" data-testid="status-counts">
         {status.objects} objects · {status.links} links · {status.flows} flows
       </span>
     </footer>

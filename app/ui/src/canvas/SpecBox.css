@@ -1,8 +1,11 @@
-/* SpecBox node: C4-style box. Token variables only. */
+/* SpecBox node: per-kind box styling. Token variables only. */
 
 .spec-box {
-  width: 210px;
+  position: relative;
+  width: 100%;
+  height: 100%;
   box-sizing: border-box;
+  overflow: hidden;
   background: var(--sp-color-bg-raised);
   border: 1px solid var(--sp-color-border-strong);
   border-radius: var(--sp-radius-box);
@@ -14,27 +17,121 @@
     opacity var(--sp-motion-fast) var(--sp-motion-ease);
 }
 
+/* --- kind cues --- */
+
+.spec-box--kind-actor {
+  border-radius: var(--sp-radius-popover);
+}
+
+.spec-box--kind-system {
+  padding-top: var(--sp-space-4);
+}
+
+.spec-box__accent-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--sp-color-accent-primary);
+  border-top-left-radius: var(--sp-radius-box);
+  border-top-right-radius: var(--sp-radius-box);
+}
+
+.spec-box--kind-group {
+  background: transparent;
+  border-style: dashed;
+  border-width: 1.5px;
+  box-shadow: none;
+}
+
+.spec-box__tab {
+  position: absolute;
+  top: calc(-1 * var(--sp-space-1));
+  left: var(--sp-space-3);
+  transform: translateY(-100%);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-space-2);
+  height: 20px;
+  background: var(--sp-color-bg-chrome);
+  border: 1px solid var(--sp-color-border-strong);
+  border-bottom: 0;
+  border-top-left-radius: var(--sp-radius-control);
+  border-top-right-radius: var(--sp-radius-control);
+  color: var(--sp-color-text-tertiary);
+}
+
+.spec-box__tab-glyph {
+  display: inline-flex;
+}
+
+.spec-box--kind-store {
+  border-bottom-left-radius: var(--sp-radius-popover);
+  border-bottom-right-radius: var(--sp-radius-popover);
+}
+
+.spec-box--kind-component {
+  clip-path: polygon(
+    0 0,
+    calc(100% - 18px) 0,
+    100% 18px,
+    100% 100%,
+    0 100%
+  );
+}
+
 .spec-box--external {
   border-style: dashed;
 }
 
-.spec-box:hover {
-  border-color: var(--sp-color-text-tertiary);
-  box-shadow:
-    inset 0 0 0 999px var(--sp-color-bg-hover),
-    var(--sp-shadow-l1);
+.spec-box__external-chip {
+  display: inline-block;
+  margin-top: var(--sp-space-1);
+  padding: 0 var(--sp-space-2);
+  height: 18px;
+  line-height: 18px;
+  border: 1px dashed var(--sp-color-border-strong);
+  border-radius: var(--sp-radius-pill);
+  color: var(--sp-color-text-tertiary);
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
 }
 
-/* Selection: accent 1.5px stroke + accent-at-12% fill. */
-.react-flow__node.selected .spec-box {
-  border: 1.5px solid var(--sp-color-accent-primary);
-  background-color: color-mix(
-    in srgb,
-    var(--sp-color-accent-primary) 12%,
-    var(--sp-color-bg-raised)
-  );
-  box-shadow: var(--sp-shadow-l2);
+/* --- status --- */
+
+.spec-box__status {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--sp-space-2);
+  border-radius: var(--sp-radius-pill);
+  font-size: var(--sp-type-caption-size);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
+
+.spec-box__status--future {
+  background: var(--sp-color-state-info);
+  color: var(--sp-color-accent-on);
+}
+
+.spec-box__status--deprecated {
+  background: var(--sp-color-state-warning);
+  color: var(--sp-color-accent-on);
+}
+
+.spec-box__status--removed {
+  background: var(--sp-color-state-danger);
+  color: var(--sp-color-accent-on);
+}
+
+.spec-box--status-removed {
+  opacity: 0.6;
+}
+
+/* --- header / content --- */
 
 .spec-box__top {
   display: flex;
@@ -45,18 +142,36 @@
 }
 
 .spec-box__kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-space-1);
   font-size: var(--sp-type-caption-size);
   font-weight: var(--sp-type-caption-weight);
   line-height: var(--sp-type-caption-line);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--sp-color-text-tertiary);
+  min-width: 0;
 }
 
-.spec-box__badge {
+.spec-box__glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.spec-box__top-right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-space-1);
+  flex: 0 0 auto;
+}
+
+.spec-box__drill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   min-width: 18px;
   height: 18px;
   padding: 0 var(--sp-space-1);
@@ -67,21 +182,94 @@
   font-family: var(--sp-font-mono);
   font-size: var(--sp-type-caption-size);
   line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--sp-motion-fast) var(--sp-motion-ease),
+    border-color var(--sp-motion-fast) var(--sp-motion-ease),
+    opacity var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.spec-box__drill:hover {
+  color: var(--sp-color-accent-primary);
+  border-color: var(--sp-color-accent-primary);
+}
+
+.spec-box__drill-glyph {
+  display: inline-flex;
+}
+
+/* Zoomable without children: faint until the box is hovered/focused. */
+.spec-box__drill--faint {
+  opacity: 0;
+}
+
+.spec-box:hover .spec-box__drill--faint,
+.spec-box:focus-within .spec-box__drill--faint {
+  opacity: 0.75;
+}
+
+.spec-box__drill--faint:hover {
+  opacity: 1;
+}
+
+/* Delayed tooltip ("Open inside" after 500 ms), token-driven. */
+.spec-box__drill::after {
+  content: "Open inside";
+  position: absolute;
+  bottom: calc(100% + var(--sp-space-1));
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-control);
+  box-shadow: var(--sp-shadow-l1);
+  color: var(--sp-color-text-primary);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-caption-size);
+  padding: 2px var(--sp-space-2);
+  opacity: 0;
+  transition: opacity var(--sp-motion-fast) var(--sp-motion-ease);
+  transition-delay: 0ms;
+  z-index: 5;
+}
+
+.spec-box__drill:hover::after,
+.spec-box__drill:focus-visible::after {
+  opacity: 1;
+  transition-delay: var(--sp-motion-tooltip-delay);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spec-box__drill::after {
+    transition: none;
+  }
 }
 
 .spec-box__title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   font-size: var(--sp-type-title-sm-size);
   font-weight: var(--sp-type-title-sm-weight);
   line-height: var(--sp-type-title-sm-line);
   color: var(--sp-color-text-primary);
+  overflow-wrap: anywhere;
 }
 
 .spec-box__caption {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   margin-top: 2px;
   font-size: var(--sp-type-body-sm-size);
   font-weight: var(--sp-type-body-sm-weight);
   line-height: var(--sp-type-body-sm-line);
   color: var(--sp-color-text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .spec-box__tags {
@@ -90,6 +278,61 @@
   gap: var(--sp-space-1);
   margin-top: var(--sp-space-2);
 }
+
+.spec-box__rename {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: var(--sp-type-title-sm-size);
+  font-weight: var(--sp-type-title-sm-weight);
+  line-height: var(--sp-type-title-sm-line);
+  font-family: var(--sp-font-ui);
+  color: var(--sp-color-text-primary);
+  background: var(--sp-color-bg-chrome);
+  border: 1px solid var(--sp-color-focus-ring);
+  border-radius: var(--sp-radius-control);
+  padding: 0 var(--sp-space-1);
+  outline: none;
+}
+
+/* --- selection --- */
+
+.react-flow__node.selected .spec-box {
+  border: 1.5px solid var(--sp-color-accent-primary);
+  background-color: color-mix(
+    in srgb,
+    var(--sp-color-accent-primary) 12%,
+    var(--sp-color-bg-raised)
+  );
+  box-shadow: var(--sp-shadow-l2);
+}
+
+.react-flow__node.selected .spec-box--kind-group {
+  background-color: color-mix(
+    in srgb,
+    var(--sp-color-accent-primary) 12%,
+    transparent
+  );
+}
+
+/* --- zoom tiers --- */
+
+.spec-box--mid .spec-box__title {
+  -webkit-line-clamp: 3;
+}
+
+.spec-box--far {
+  padding: 0;
+  border: 0;
+  border-radius: var(--sp-radius-control);
+  box-shadow: none;
+}
+
+.spec-box--kind-actor.spec-box--far { background: var(--sp-color-accent-secondary); }
+.spec-box--kind-system.spec-box--far { background: var(--sp-color-accent-primary); }
+.spec-box--kind-group.spec-box--far { background: var(--sp-color-text-tertiary); }
+.spec-box--kind-app.spec-box--far { background: var(--sp-color-state-info); }
+.spec-box--kind-store.spec-box--far { background: var(--sp-color-state-success); }
+.spec-box--kind-component.spec-box--far { background: var(--sp-color-state-warning); }
 
 /* Invisible connection points — edges attach without visual noise. */
 .spec-box__handle {

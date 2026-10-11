@@ -5,9 +5,21 @@ import StatusBar from "./components/StatusBar";
 import Modal from "./components/Modal";
 import Button from "./components/Button";
 import FlowCanvas from "./canvas/FlowCanvas";
+import ErrorBoundary from "./components/ErrorBoundary";
+import QuickAdd from "./canvas/QuickAdd";
 import TokenSheet from "./pages/TokenSheet";
-import { SAMPLE_NODES } from "./data/sample";
 import { SessionProvider, useSession } from "./session/SessionProvider";
+import {
+  bootModel,
+  clearToast,
+  newObjectId,
+  seedModel,
+  syncIfStale,
+  undoModel,
+  useModel,
+} from "./model/store";
+import { bridgeDispatch } from "./session/bridge";
+import { applySessionCounts } from "./session/SessionProvider";
 import "./App.css";
 
 function readParam(name: string): string | null {
@@ -19,55 +31,104 @@ function readParam(name: string): string | null {
 }
 
 function Shell() {
-  // M3 demo entry state: Payments API selected so the panel has content.
-  const [selectedId, setSelectedId] = useState<string | null>("payments");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [zoom, setZoom] = useState(1);
   const tokenPage = useMemo(() => readParam("page") === "tokens", []);
   const session = useSession();
-
-  const selectedNode = useMemo(
-    () => SAMPLE_NODES.find((n) => n.id === selectedId) ?? null,
-    [selectedId],
-  );
+  const model = useModel();
 
   const togglePanel = useCallback(() => setPanelCollapsed((c) => !c), []);
 
+  // Boot the document store once the session is clean.
+  useEffect(() => {
+    if (session.status === "clean") void bootModel();
+  }, [session.status]);
+
+  // Follow backend rev changes (undo/redo from any path).
+  useEffect(() => {
+    if (session.status !== "clean" || model.status !== "ready") return;
+    const t = window.setInterval(() => void syncIfStale(), 1000);
+    return () => window.clearInterval(t);
+  }, [session.status, model.status]);
+
+  // Auto-dismiss toasts.
+  useEffect(() => {
+    if (model.toast == null) return;
+    const t = window.setTimeout(() => clearToast(), 6000);
+    return () => window.clearTimeout(t);
+  }, [model.toast]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const inField =
-        target !== null &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable);
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         togglePanel();
-        return;
-      }
-      if (inField) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        if (e.shiftKey) {
-          void session.redo();
-        } else {
-          void session.undo();
-        }
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
-        e.preventDefault();
-        void session.redo();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, session]);
+  }, [togglePanel]);
 
   const showRecovery =
     session.status === "needs_recovery" && session.recovery !== null;
   const pendingCount = session.recovery?.pendingCommands ?? 0;
+
+  const emptyModel =
+    model.status === "ready" &&
+    Object.keys(model.doc.model.objects).length === 0;
+  const emptyDiagram =
+    model.status === "ready" &&
+    model.view != null &&
+    Object.keys(model.view.diagram.boxes).length === 0;
+
+  const addFirstSystem = useCallback(() => {
+    const id = newObjectId();
+    void (async () => {
+      const counts = await bridgeDispatch({
+        op: "batch",
+        commands: [
+          {
+            op: "createObject",
+            object: {
+              id,
+              name: "New System",
+              type: "system",
+              parentId: null,
+              status: "live",
+              external: false,
+              caption: "",
+              description: "",
+              tagIds: [],
+              technologies: [],
+              links: [],
+              groupIds: [],
+              labels: {},
+            },
+          },
+          {
+            op: "createDiagram",
+            diagram: {
+              id: "dg-first",
+              name: "Shop Landscape",
+              level: "context",
+              scopeObjectId: null,
+              description: "",
+              order: 0,
+              pinned: false,
+              boxes: { [id]: { x: 64, y: 64, w: 240, h: 120 } },
+              connections: {},
+              landing: {},
+              autoPlaced: false,
+              created: "",
+              modified: "",
+            },
+          },
+        ],
+      });
+      applySessionCounts(counts);
+      await bootModel();
+    })();
+  }, []);
 
   return (
     <div className="app-shell">
@@ -75,16 +136,59 @@ function Shell() {
       <div className="app-main">
         {tokenPage ? (
           <TokenSheet />
+        ) : emptyModel ? (
+          <div className="empty-state">
+            <div className="empty-state__card" role="status">
+              <h2 className="empty-state__title">Start your map</h2>
+              <p className="empty-state__body">
+                Create your first system, or open a made-up sample to explore.
+              </p>
+              <div className="empty-state__actions">
+                <Button
+                  variant="primary"
+                  data-testid="empty-add-system"
+                  onClick={addFirstSystem}
+                >
+                  Add first system
+                </Button>
+                <Button
+                  variant="secondary"
+                  data-testid="empty-open-sample"
+                  onClick={() => void seedModel()}
+                >
+                  Open sample
+                </Button>
+              </div>
+            </div>
+          </div>
         ) : (
-          <FlowCanvas onSelect={setSelectedId} onZoom={setZoom} />
+          <ErrorBoundary label="Canvas">
+            <FlowCanvas onZoom={setZoom} />
+          </ErrorBoundary>
         )}
-        <SidePanel
-          node={selectedNode}
-          collapsed={panelCollapsed}
-          onToggle={togglePanel}
-        />
+        {emptyDiagram && (
+          <div className="empty-diagram-hint" role="status">
+            Double-click to add a box
+          </div>
+        )}
+        <QuickAdd />
+        <SidePanel collapsed={panelCollapsed} onToggle={togglePanel} />
       </div>
       <StatusBar zoom={zoom} />
+      {model.toast != null && (
+        <div className="app-toast" role="status">
+          <span>{model.toast}</span>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              clearToast();
+              void undoModel();
+            }}
+          >
+            Undo
+          </Button>
+        </div>
+      )}
       {showRecovery && (
         <Modal
           title="Recovered unsaved changes"
@@ -115,7 +219,9 @@ function Shell() {
 export default function App() {
   return (
     <SessionProvider>
-      <Shell />
+      <ErrorBoundary label="App">
+        <Shell />
+      </ErrorBoundary>
     </SessionProvider>
   );
 }

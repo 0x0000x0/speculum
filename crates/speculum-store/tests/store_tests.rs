@@ -772,3 +772,325 @@ fn nonstop_editing_still_saves_every_5s() {
     }
     assert!(saved, "autosave never fired during continuous editing");
 }
+
+// 19. M4: hand layout persists across close/reopen --------------------------------
+
+#[test]
+fn move_boxes_and_viewport_survive_close_reopen() {
+    use speculum_core::{Diagram, DiagramLevel, ObjectKind, Rect, Viewport};
+    use std::collections::BTreeMap;
+
+    let (_dir, path) = tmp_file("handlayout.speculum");
+    let mut s = Session::create(&path, "Hand Layout").expect("create");
+    // One box + one diagram containing it.
+    s.dispatch(
+        Command::CreateObject {
+            object: Object {
+                id: "obj-box".to_string(),
+                name: "Box".to_string(),
+                kind: ObjectKind::App,
+                ..Default::default()
+            },
+        },
+        1000,
+    )
+    .expect("create obj");
+    s.dispatch(
+        Command::CreateDiagram {
+            diagram: Diagram {
+                id: "dg-1".to_string(),
+                name: "D".to_string(),
+                level: DiagramLevel::Context,
+                boxes: BTreeMap::from([(
+                    "obj-box".to_string(),
+                    Rect { x: 64.0, y: 64.0, w: 240.0, h: 120.0 },
+                )]),
+                ..Default::default()
+            },
+        },
+        1001,
+    )
+    .expect("create diagram");
+    let rev_before = s.rev();
+
+    // Drag the box somewhere else.
+    let moved = Rect { x: 400.0, y: 312.0, w: 240.0, h: 120.0 };
+    s.dispatch(
+        Command::MoveBoxes {
+            diagram_id: "dg-1".to_string(),
+            moves: BTreeMap::from([("obj-box".to_string(), moved.clone())]),
+        },
+        1002,
+    )
+    .expect("move");
+    assert!(s.rev() > rev_before, "rev must increment on change");
+
+    // Save a viewport.
+    let vp = Viewport { x: 11.0, y: 22.0, zoom: 1.5 };
+    s.dispatch(
+        Command::SetViewport {
+            diagram_id: "dg-1".to_string(),
+            viewport: Some(vp.clone()),
+        },
+        1003,
+    )
+    .expect("viewport");
+
+    s.close().expect("close");
+
+    match Session::open(&path).expect("reopen") {
+        OpenOutcome::Clean(live) => {
+            let d = live.doc().diagrams.get("dg-1").expect("diagram");
+            assert_eq!(d.boxes.get("obj-box"), Some(&moved));
+            assert_eq!(d.viewport, Some(vp));
+            live.close().expect("close2");
+        }
+        OpenOutcome::NeedsRecovery(_, _) => panic!("expected clean reopen"),
+    }
+}
+
+// 20. M4c: SetViewport is never an undo step ----------------------------------
+
+#[test]
+fn set_viewport_is_not_an_undo_step() {
+    use speculum_core::{DiagramLevel, ObjectKind, Viewport};
+
+    let (_dir, path) = tmp_file("viewport-noundo.speculum");
+    let mut s = Session::create(&path, "Viewport Undo").expect("create");
+    s.dispatch(
+        Command::CreateObject {
+            object: Object {
+                id: "obj-box".to_string(),
+                name: "Box".to_string(),
+                kind: ObjectKind::App,
+                ..Default::default()
+            },
+        },
+        1000,
+    )
+    .expect("create obj");
+    let old_rect = Rect { x: 64.0, y: 64.0, w: 240.0, h: 120.0 };
+    s.dispatch(
+        Command::CreateDiagram {
+            diagram: Diagram {
+                id: "dg-1".to_string(),
+                name: "D".to_string(),
+                level: DiagramLevel::Context,
+                boxes: BTreeMap::from([("obj-box".to_string(), old_rect.clone())]),
+                ..Default::default()
+            },
+        },
+        1001,
+    )
+    .expect("create diagram");
+
+    // Drag the box, then move the camera.
+    let new_rect = Rect { x: 400.0, y: 312.0, w: 240.0, h: 120.0 };
+    s.dispatch(
+        Command::MoveBoxes {
+            diagram_id: "dg-1".to_string(),
+            moves: BTreeMap::from([("obj-box".to_string(), new_rect.clone())]),
+        },
+        1002,
+    )
+    .expect("move");
+    let vp = Viewport { x: 11.0, y: 22.0, zoom: 1.5 };
+    s.dispatch(
+        Command::SetViewport {
+            diagram_id: "dg-1".to_string(),
+            viewport: Some(vp.clone()),
+        },
+        1003,
+    )
+    .expect("viewport");
+    assert_eq!(
+        s.doc().diagrams.get("dg-1").unwrap().boxes.get("obj-box"),
+        Some(&new_rect)
+    );
+
+    // Undo must skip the camera change and restore the box; viewport stays.
+    assert!(s.undo(1004).expect("undo"), "undo should pop the MoveBoxes step");
+    let d = s.doc().diagrams.get("dg-1").expect("diagram");
+    assert_eq!(d.boxes.get("obj-box"), Some(&old_rect));
+    assert_eq!(d.viewport, Some(vp.clone()));
+
+    // Redo must still work and must not touch the viewport.
+    assert!(s.redo(1005).expect("redo"), "redo should re-apply MoveBoxes");
+    let d = s.doc().diagrams.get("dg-1").expect("diagram");
+    assert_eq!(d.boxes.get("obj-box"), Some(&new_rect));
+    assert_eq!(d.viewport, Some(vp.clone()));
+
+    // A viewport change must not clear the redo stack: undo again, move the
+    // camera, redo must still re-apply the box move.
+    assert!(s.undo(1006).expect("undo2"));
+    let vp2 = Viewport { x: 99.0, y: 88.0, zoom: 2.0 };
+    s.dispatch(
+        Command::SetViewport {
+            diagram_id: "dg-1".to_string(),
+            viewport: Some(vp2.clone()),
+        },
+        1007,
+    )
+    .expect("viewport2");
+    assert!(s.redo(1008).expect("redo2"), "SetViewport must not clear redo");
+    let d = s.doc().diagrams.get("dg-1").expect("diagram");
+    assert_eq!(d.boxes.get("obj-box"), Some(&new_rect));
+    assert_eq!(d.viewport, Some(vp2));
+    s.close().expect("close");
+}
+
+// 21. M5: viewports on 3 diagrams persist across close/reopen --------------
+
+#[test]
+fn viewports_on_three_diagrams_persist() {
+    use speculum_core::{DiagramLevel, ObjectKind, Viewport};
+
+    let (_dir, path) = tmp_file("viewports3.speculum");
+    let mut s = Session::create(&path, "Viewport Doc").expect("create");
+    for (id, name, kind) in [
+        ("obj-a", "Alpha", ObjectKind::System),
+        ("obj-b", "Beta", ObjectKind::App),
+        ("obj-c", "Gamma", ObjectKind::Component),
+    ] {
+        s.dispatch(
+            Command::CreateObject {
+                object: Object {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    kind,
+                    ..Default::default()
+                },
+            },
+            1000,
+        )
+        .expect("create obj");
+    }
+    for (i, did) in ["dg-1", "dg-2", "dg-3"].iter().enumerate() {
+        s.dispatch(
+            Command::CreateDiagram {
+                diagram: Diagram {
+                    id: did.to_string(),
+                    name: format!("D{i}"),
+                    level: DiagramLevel::Context,
+                    order: i as u32,
+                    boxes: BTreeMap::from([(
+                        "obj-a".to_string(),
+                        Rect { x: 64.0, y: 64.0, w: 240.0, h: 120.0 },
+                    )]),
+                    ..Default::default()
+                },
+            },
+            1010 + i as u64,
+        )
+        .expect("create diagram");
+    }
+    let vps = [
+        Viewport { x: 11.0, y: 22.0, zoom: 1.5 },
+        Viewport { x: -140.0, y: 87.5, zoom: 0.75 },
+        Viewport { x: 400.0, y: -33.25, zoom: 2.0 },
+    ];
+    for (did, vp) in ["dg-1", "dg-2", "dg-3"].iter().zip(vps.iter()) {
+        s.dispatch(
+            Command::SetViewport {
+                diagram_id: did.to_string(),
+                viewport: Some(vp.clone()),
+            },
+            1020,
+        )
+        .expect("viewport");
+    }
+    s.close().expect("close");
+
+    match Session::open(&path).expect("reopen") {
+        OpenOutcome::Clean(live) => {
+            for (did, vp) in ["dg-1", "dg-2", "dg-3"].iter().zip(vps.iter()) {
+                let d = live.doc().diagrams.get(*did).expect("diagram");
+                assert_eq!(d.viewport.as_ref(), Some(vp), "viewport of {did}");
+            }
+            live.close().expect("close2");
+        }
+        OpenOutcome::NeedsRecovery(_, _) => panic!("expected clean reopen"),
+    }
+}
+
+// 22. M5: open repairs scope-boxed boxes as an undoable command -----------
+
+#[test]
+fn open_repairs_scope_boxed_boxes() {
+    use speculum_core::ObjectKind;
+
+    let (_dir, path) = tmp_file("scopefix.speculum");
+    let mut s = Session::create(&path, "Scope Doc").expect("create");
+    s.dispatch(
+        Command::CreateObject {
+            object: Object {
+                id: "obj-sys".to_string(),
+                name: "Storefront".to_string(),
+                kind: ObjectKind::System,
+                ..Default::default()
+            },
+        },
+        1000,
+    )
+    .expect("create obj");
+    s.dispatch(
+        Command::CreateObject {
+            object: Object {
+                id: "obj-app".to_string(),
+                name: "Web App".to_string(),
+                kind: ObjectKind::App,
+                ..Default::default()
+            },
+        },
+        1001,
+    )
+    .expect("create obj2");
+    // Bypass validation to simulate an old file: scope object boxed on its
+    // own diagram (ApplyLayout does not run the AddToDiagram guard).
+    s.dispatch(
+        Command::CreateDiagram {
+            diagram: Diagram {
+                id: "dg-sub".to_string(),
+                name: "Storefront Apps".to_string(),
+                level: speculum_core::DiagramLevel::App,
+                scope_object_id: Some("obj-sys".to_string()),
+                boxes: BTreeMap::from([
+                    (
+                        "obj-sys".to_string(),
+                        Rect { x: 64.0, y: 64.0, w: 240.0, h: 120.0 },
+                    ),
+                    (
+                        "obj-app".to_string(),
+                        Rect { x: 352.0, y: 64.0, w: 240.0, h: 120.0 },
+                    ),
+                ]),
+                ..Default::default()
+            },
+        },
+        1002,
+    )
+    .expect("create diagram");
+    s.close().expect("close");
+
+    match Session::open(&path).expect("reopen") {
+        OpenOutcome::Clean(mut live) => {
+            let d = live.doc().diagrams.get("dg-sub").expect("diagram");
+            assert!(
+                !d.boxes.contains_key("obj-sys"),
+                "scope box removed on open"
+            );
+            assert!(d.boxes.contains_key("obj-app"), "other boxes kept");
+            // Undoable: one undo restores the scope box.
+            assert!(live.undo(2000).expect("undo"), "migration is undoable");
+            assert!(live
+                .doc()
+                .diagrams
+                .get("dg-sub")
+                .expect("diagram")
+                .boxes
+                .contains_key("obj-sys"));
+            live.close().expect("close2");
+        }
+        OpenOutcome::NeedsRecovery(_, _) => panic!("expected clean reopen"),
+    }
+}

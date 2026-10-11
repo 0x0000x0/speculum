@@ -79,6 +79,9 @@ function buildCss() {
   independent.push(`  --sp-motion-fast: ${tokens.motion.fast};`);
   independent.push(`  --sp-motion-base: ${tokens.motion.base};`);
   independent.push(`  --sp-motion-drill: ${tokens.motion.drill};`);
+  if (tokens.motion.tooltipDelay) {
+    independent.push(`  --sp-motion-tooltip-delay: ${tokens.motion.tooltipDelay};`);
+  }
   independent.push(`  --sp-motion-ease: ${tokens.motion.ease};`);
   independent.push(`  --sp-dim-unrelated: ${tokens.color.dim.unrelatedOpacity};`);
 

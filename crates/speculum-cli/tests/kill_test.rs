@@ -41,6 +41,27 @@ fn kill_mid_edit_recovers_without_corruption() {
             .spawn()
             .expect("spawn stress-edit");
 
+        // Wait for the first save to complete before starting the kill
+        // timer: poll until the file exists AND parses as a Document
+        // (short delays like 30 ms can otherwise fire before anything was
+        // ever written, failing the test for no reason).
+        let mut waited = Duration::from_millis(0);
+        let step = Duration::from_millis(10);
+        let timeout = Duration::from_secs(15);
+        loop {
+            let ready = std::fs::read(&file)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<speculum_core::Document>(&bytes).ok())
+                .is_some();
+            if ready {
+                break;
+            }
+            if waited >= timeout {
+                panic!("round {round}: timed out after 15 s waiting for the first save of {}", file.display());
+            }
+            sleep(step);
+            waited += step;
+        }
         sleep(Duration::from_millis(*delay));
         // SIGKILL via std.
         child.kill().expect("kill child");

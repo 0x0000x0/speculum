@@ -57,6 +57,7 @@ pub struct Session {
     last_save_ms: u64,
     last_snapshot_ms: u64,
     next_seq: u64,
+    rev: u64,
 }
 
 impl Session {
@@ -84,6 +85,12 @@ impl Session {
         counts_of(&self.doc)
     }
 
+    /// Revision counter: increments on every applied change (dispatch,
+    /// undo, redo, revert) so UI clients know when to refetch.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
     /// Create a new empty document and save it immediately.
     pub fn create(path: &Path, name: &str) -> Result<Session, StoreError> {
         let abs = absolute_path(path);
@@ -106,6 +113,7 @@ impl Session {
             last_save_ms: now,
             last_snapshot_ms: now,
             next_seq: 1,
+            rev: 0,
         })
     }
 
@@ -215,7 +223,7 @@ impl Session {
         write_lock(path)?;
         let next_seq = journal::max_seq(&lines) + 1;
         let now = now_ms();
-        Ok(OpenOutcome::Clean(Session {
+        let mut session = Session {
             path: path.to_path_buf(),
             doc: base,
             history: History::new(),
@@ -224,7 +232,13 @@ impl Session {
             last_save_ms: now,
             last_snapshot_ms: now,
             next_seq: if next_seq == 0 { 1 } else { next_seq },
-        }))
+            rev: 0,
+        };
+        // One-off M5 migration: old files may box a diagram's own scope
+        // object. Remove such boxes as a normal undoable (journaled)
+        // command so nothing is silently lost.
+        repair_scope_boxes(&mut session, now);
+        Ok(OpenOutcome::Clean(session))
     }
 
     fn append_line(&mut self, line: &JournalLine) -> Result<(), StoreError> {
@@ -241,6 +255,7 @@ impl Session {
         self.append_line(&line)?;
         self.dirty = true;
         self.last_change_ms = now_ms_value;
+        self.rev += 1;
         Ok(())
     }
 
@@ -251,6 +266,7 @@ impl Session {
             self.append_line(&line)?;
             self.dirty = true;
             self.last_change_ms = now_ms_value;
+            self.rev += 1;
             Ok(true)
         } else {
             Ok(false)
@@ -264,6 +280,7 @@ impl Session {
             self.append_line(&line)?;
             self.dirty = true;
             self.last_change_ms = now_ms_value;
+            self.rev += 1;
             Ok(true)
         } else {
             Ok(false)
@@ -425,6 +442,7 @@ impl Session {
         self.append_line(&line)?;
         self.dirty = true;
         self.last_change_ms = now_ms_value;
+        self.rev += 1;
         // Record the revert as a new named version.
         let revert_name = format!("Revert to {}", target.name);
         let notes = if note.trim().is_empty() {
@@ -517,7 +535,10 @@ impl PendingSession {
             last_save_ms: now,
             last_snapshot_ms: now,
             next_seq: self.next_seq(),
+            rev: 0,
         };
+        // Same one-off M5 migration as a clean open (undoable, journaled).
+        repair_scope_boxes(&mut session, now);
         session.save_now_at(now)?;
         Ok(session)
     }
@@ -540,6 +561,7 @@ impl PendingSession {
             last_save_ms: now,
             last_snapshot_ms: now,
             next_seq,
+            rev: 0,
         };
         // Truncate the journal: the user chose the saved state.
         journal::truncate_journal(&journal_path_for(&session.path))?;
@@ -551,6 +573,45 @@ impl PendingSession {
 }
 
 // -- locks -----------------------------------------------------------------
+
+/// One-off M5 migration shared by `open` and `restore`: drop scope objects
+/// boxed on their own diagram via a normal undoable (journaled) Batch, and
+/// log what was removed to stderr.
+fn repair_scope_boxes(session: &mut Session, now_ms_value: u64) {
+    let cmds = speculum_core::scope_box_removal_commands(session.doc());
+    if cmds.is_empty() {
+        return;
+    }
+    // RemoveFromDiagram validates the box is present; re-check under the
+    // live doc to avoid a spurious failure.
+    let present: Vec<Command> = cmds
+        .into_iter()
+        .filter(|c| match c {
+            Command::RemoveFromDiagram {
+                diagram_id,
+                object_id,
+            } => session
+                .doc()
+                .diagrams
+                .get(diagram_id)
+                .map(|d| d.boxes.contains_key(object_id))
+                .unwrap_or(false),
+            _ => true,
+        })
+        .collect();
+    if present.is_empty() {
+        return;
+    }
+    let n = present.len();
+    match session.dispatch(Command::Batch { commands: present }, now_ms_value) {
+        Ok(()) => {
+            eprintln!("speculum: removed {n} scope object box(es) from their own diagram(s) (M5 migration, undoable)");
+        }
+        Err(e) => {
+            eprintln!("speculum: scope-box migration failed: {e}");
+        }
+    }
+}
 
 fn write_lock(doc_path: &Path) -> Result<(), StoreError> {
     let lock = lock_path_for(doc_path);

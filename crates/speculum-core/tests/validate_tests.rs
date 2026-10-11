@@ -235,3 +235,44 @@ fn repair_model_only_never_panics() {
     let _ = validate(&m);
     let _m2: BTreeMap<String, String> = BTreeMap::new();
 }
+
+#[test]
+fn scope_object_boxed_warns_and_repairs() {
+    let mut doc = sample_document();
+    // Boxing the scope object on its own diagram is a Warning (not Error).
+    doc.diagrams
+        .get_mut("diag-store-a")
+        .unwrap()
+        .boxes
+        .insert(
+            "obj-storefront".to_string(),
+            speculum_core::Rect { x: 0.0, y: 0.0, w: 240.0, h: 120.0 },
+        );
+    let issues = validate_document(&doc);
+    let warn = issues
+        .iter()
+        .find(|i| i.code == "scope-object-boxed")
+        .expect("scope-object-boxed warning");
+    assert_eq!(warn.severity, Severity::Warning);
+    assert!(warn.message.contains("scope object boxed on its own diagram"));
+
+    // One-off repair removes the box; undoable removal commands match.
+    let cmds = speculum_core::scope_box_removal_commands(&doc);
+    assert_eq!(cmds.len(), 1);
+    let before = doc.clone();
+    let inv = speculum_core::Command::Batch { commands: cmds }
+        .apply(&mut doc)
+        .expect("repair batch applies");
+    assert!(!doc.diagrams["diag-store-a"].boxes.contains_key("obj-storefront"));
+    assert!(validate_document(&doc)
+        .iter()
+        .all(|i| i.code != "scope-object-boxed"));
+    inv.apply(&mut doc).expect("repair undoes");
+    assert_eq!(doc, before);
+
+    // repair_document also clears it (reporting the same code).
+    let mut doc2 = before.clone();
+    let fixed = repair_document(&mut doc2);
+    assert!(fixed.iter().any(|i| i.code == "scope-object-boxed"));
+    assert!(!doc2.diagrams["diag-store-a"].boxes.contains_key("obj-storefront"));
+}

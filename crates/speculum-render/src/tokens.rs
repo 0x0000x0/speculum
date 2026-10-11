@@ -5,6 +5,7 @@
 pub mod dark {
     pub const BG_CHROME: &str = "#0E1116";
     pub const BG_CANVAS: &str = "#131720";
+    pub const BG_CANVAS_DOT: &str = "#3B4A63";
     pub const BG_RAISED: &str = "#1A212E";
     pub const BG_HOVER: &str = "rgba(255,255,255,0.06)";
     pub const BORDER_SUBTLE: &str = "#2A3344";
@@ -94,6 +95,7 @@ pub mod dark {
 pub mod light {
     pub const BG_CHROME: &str = "#F7F7F8";
     pub const BG_CANVAS: &str = "#FFFFFF";
+    pub const BG_CANVAS_DOT: &str = "#C9D0DB";
     pub const BG_RAISED: &str = "#FFFFFF";
     pub const BG_HOVER: &str = "rgba(17,24,39,0.05)";
     pub const BORDER_SUBTLE: &str = "#E5E7EB";

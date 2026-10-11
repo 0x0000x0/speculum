@@ -13,4 +13,81 @@
   flex: 1 1 auto;
   min-height: 0;
   background: var(--sp-color-bg-canvas);
+  position: relative;
+}
+
+/* --- empty states --- */
+
+.empty-state {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.empty-state__card {
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-popover);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-6);
+  max-width: 380px;
+  text-align: center;
+}
+
+.empty-state__title {
+  margin: 0 0 var(--sp-space-2);
+  font-size: var(--sp-type-view-title-size);
+  font-weight: var(--sp-type-view-title-weight);
+  line-height: var(--sp-type-view-title-line);
+  color: var(--sp-color-text-primary);
+}
+
+.empty-state__body {
+  margin: 0 0 var(--sp-space-4);
+  font-size: var(--sp-type-body-size);
+  color: var(--sp-color-text-secondary);
+}
+
+.empty-state__actions {
+  display: flex;
+  gap: var(--sp-space-2);
+  justify-content: center;
+}
+
+.empty-diagram-hint {
+  position: absolute;
+  left: 50%;
+  top: var(--sp-space-6);
+  transform: translateX(-50%);
+  z-index: 10;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-pill);
+  box-shadow: var(--sp-shadow-l1);
+  padding: var(--sp-space-1) var(--sp-space-4);
+  font-size: var(--sp-type-body-sm-size);
+  color: var(--sp-color-text-secondary);
+  pointer-events: none;
+}
+
+/* --- toast --- */
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--sp-layout-status-bar-height) + var(--sp-space-4));
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-3);
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-popover);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-2) var(--sp-space-3);
+  font-size: var(--sp-type-body-sm-size);
+  color: var(--sp-color-text-primary);
 }

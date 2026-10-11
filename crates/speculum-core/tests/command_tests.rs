@@ -97,7 +97,7 @@ fn all_variants_apply_invert_loop() {
         Command::CreateTagGroup { group: new_group },
         Command::CreateDomain { domain: new_domain },
         Command::CreateDiagram { diagram: new_diagram },
-        Command::PatchDiagram { id: "diag-context".to_string(), name: Some("Ctx2".to_string()), description: None, order: None, pinned: None, domain_id: None },
+        Command::PatchDiagram { id: "diag-context".to_string(), name: Some("Ctx2".to_string()), description: None, order: None, pinned: None, domain_id: None, auto_placed: None },
         Command::AddToDiagram { diagram_id: "diag-context".to_string(), object_id: "obj-webapp".to_string(), rect: rect() },
         Command::MoveBoxes { diagram_id: "diag-context".to_string(), moves: BTreeMap::from([("obj-customer".to_string(), rect())]) },
         Command::ApplyLayout { diagram_id: "diag-context".to_string(), boxes: BTreeMap::from([("obj-customer".to_string(), rect())]) },
@@ -109,7 +109,7 @@ fn all_variants_apply_invert_loop() {
         Command::AddStep { flow_id: "flow-receipt".to_string(), path: vec![], index: 0, step: new_step },
         Command::PatchStep { flow_id: "flow-receipt".to_string(), step_id: "step-r1".to_string(), title: Some("T".to_string()), description: None, kind: None, reversed: None, origin_id: None, target_id: None, via_connection_id: None, object_id: None, go_to_flow_id: None },
         Command::AddPath { flow_id: "flow-receipt".to_string(), step_id: "step-r1".to_string(), path: new_path },
-        Command::Batch(vec![Command::PatchFlow { id: "flow-receipt".to_string(), name: Some("R2".to_string()), description: None, pinned: None, show_all_connection_names: None, show_all_steps: None, diagram_id: None }]),
+        Command::Batch { commands: vec![Command::PatchFlow { id: "flow-receipt".to_string(), name: Some("R2".to_string()), description: None, pinned: None, show_all_connection_names: None, show_all_steps: None, diagram_id: None }] },
     ];
     for cmd in cmds {
         apply_invert_restores(doc.clone(), cmd);
@@ -306,7 +306,7 @@ fn batch_is_atomic_and_inverse_reversed() {
     let mut doc = sample_document();
     let before = doc.clone();
     // second command fails (duplicate) -> whole batch fails, doc unchanged
-    let bad = Command::Batch(vec![
+    let bad = Command::Batch { commands: vec![
         Command::PatchFlow {
             id: "flow-receipt".to_string(),
             name: Some("X".to_string()),
@@ -319,7 +319,7 @@ fn batch_is_atomic_and_inverse_reversed() {
         Command::CreateFlow {
             flow: Flow { id: "flow-checkout".to_string(), ..Default::default() },
         },
-    ]);
+    ] };
     assert!(bad.apply(&mut doc).is_err());
     assert_eq!(doc, before);
 }
@@ -406,4 +406,38 @@ fn add_and_delete_path_round_trip() {
     assert_eq!(doc.model.flows["flow-checkout"].find_step(&"step-choice".to_string()).unwrap().paths.len(), 1);
     inv2.apply(&mut doc).unwrap();
     assert_eq!(doc, before);
+}
+
+#[test]
+fn add_scope_object_to_own_diagram_is_rejected() {
+    let mut doc = sample_document();
+    // diag-store-a is scoped to obj-storefront: boxing it must fail clearly.
+    let err = Command::AddToDiagram {
+        diagram_id: "diag-store-a".to_string(),
+        object_id: "obj-storefront".to_string(),
+        rect: rect(),
+    }
+    .apply(&mut doc)
+    .expect_err("scope object must not be boxed on its own diagram");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("scope object"),
+        "clear error message, got: {msg}"
+    );
+    // Other objects still fine.
+    Command::AddToDiagram {
+        diagram_id: "diag-store-a".to_string(),
+        object_id: "obj-storefront".to_string(),
+        rect: rect(),
+    }
+    .apply(&mut doc)
+    .expect_err("still rejected");
+    apply_invert_restores(
+        doc.clone(),
+        Command::AddToDiagram {
+            diagram_id: "diag-store-a".to_string(),
+            object_id: "obj-customer".to_string(),
+            rect: rect(),
+        },
+    );
 }
