@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 import {
   KIND_LABELS,
@@ -10,7 +10,11 @@ import {
   lowerConnections,
   patchConnection,
   showExistingConnection,
+  useDoc,
   useModel,
+  useSelectedEdgeState,
+  useSelection,
+  useView,
   zoomInto,
 } from "../model/store";
 import type { Connection } from "../model/types";
@@ -125,7 +129,9 @@ function EdgeTextField({
 }
 
 function EdgeDetails({ conn }: { conn: Connection }) {
-  const { doc, view, selectedEdge } = useModel();
+  const doc = useDoc();
+  const view = useView();
+  const selectedEdge = useSelectedEdgeState();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const diagramId = view?.diagram.id ?? null;
   const originName = doc.model.objects[conn.originId]?.name ?? conn.originId;
@@ -381,7 +387,9 @@ function EdgeDetails({ conn }: { conn: Connection }) {
 
 export default function SidePanel({ collapsed, onToggle }: SidePanelProps) {
   const status = useSessionStatus();
-  const { doc, selection, selectedEdge } = useModel();
+  const doc = useDoc();
+  const selection = useSelection();
+  const selectedEdge = useSelectedEdgeState();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const edgeConn =
@@ -390,19 +398,38 @@ export default function SidePanel({ collapsed, onToggle }: SidePanelProps) {
   const selectedId = selection.length > 0 ? selection[0] : null;
   const obj = selectedId != null ? doc.model.objects[selectedId] : null;
 
-  const childCount =
-    obj != null
-      ? Object.values(doc.model.objects).filter((o) => o.parentId === obj.id).length
-      : 0;
-  const incoming =
-    obj != null
-      ? Object.values(doc.model.connections).filter((c) => c.targetId === obj.id).length
-      : 0;
-  const outgoing =
-    obj != null
-      ? Object.values(doc.model.connections).filter((c) => c.originId === obj.id).length
-      : 0;
-  const flowCount = obj != null ? flowsMentioning(doc, obj.id) : 0;
+  // Model scans are memoized: selection changes re-render the panel on
+  // every click, and rescanning all objects/connections each time cost
+  // real milliseconds at 500+ objects (SPEED part 2: select < 16ms).
+  const childCount = useMemo(
+    () =>
+      obj != null
+        ? Object.values(doc.model.objects).filter((o) => o.parentId === obj.id).length
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, selectedId],
+  );
+  const incoming = useMemo(
+    () =>
+      obj != null
+        ? Object.values(doc.model.connections).filter((c) => c.targetId === obj.id).length
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, selectedId],
+  );
+  const outgoing = useMemo(
+    () =>
+      obj != null
+        ? Object.values(doc.model.connections).filter((c) => c.originId === obj.id).length
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, selectedId],
+  );
+  const flowCount = useMemo(
+    () => (obj != null ? flowsMentioning(doc, obj.id) : 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, selectedId],
+  );
   const zoomable =
     obj != null && (canContain(obj.type) || childCount > 0);
 

@@ -30,7 +30,16 @@ function readParam(name: string): string | null {
   }
 }
 
+let shellRenderMarked = false;
 function Shell() {
+  if (!shellRenderMarked) {
+    shellRenderMarked = true;
+    try {
+      performance.mark("speculum:shell-render");
+    } catch {
+      /* ignore */
+    }
+  }
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [zoom, setZoom] = useState(1);
   const tokenPage = useMemo(() => readParam("page") === "tokens", []);

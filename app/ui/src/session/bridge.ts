@@ -501,21 +501,6 @@ function mockDiagramEdges(doc: SpecDocument, diagramId: string): ViewEdge[] {
 
 // --- context trays (mirrors speculum-core context::context_trays EXACTLY) ---
 
-function subtreeOf(doc: SpecDocument, root: string): Set<string> {
-  const seen = new Set<string>([root]);
-  const stack = [root];
-  while (stack.length > 0) {
-    const cur = stack.pop()!;
-    for (const o of Object.values(doc.model.objects)) {
-      if ((o.parentId ?? null) === cur && !seen.has(o.id)) {
-        seen.add(o.id);
-        stack.push(o.id);
-      }
-    }
-  }
-  return seen;
-}
-
 function mockContextTrays(doc: SpecDocument, diagramId: string): ContextTray[] {
   const d = doc.diagrams[diagramId];
   if (!d) return [];
@@ -527,11 +512,43 @@ function mockContextTrays(doc: SpecDocument, diagramId: string): ContextTray[] {
   const siblings = Object.values(doc.model.objects)
     .filter((o) => (o.parentId ?? null) === parent && o.id !== scopeId)
     .sort((a, b) => (a.name === b.name ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.name < b.name ? -1 : 1));
-  const scopeSub = subtreeOf(doc, scopeId);
+  if (siblings.length === 0) return [];
+  // One parent->children index up front (was a full scan per subtree).
+  const kidsOf = new Map<string, string[]>();
+  for (const o of Object.values(doc.model.objects)) {
+    const p = o.parentId ?? null;
+    if (p != null) {
+      const arr = kidsOf.get(p);
+      if (arr) arr.push(o.id);
+      else kidsOf.set(p, [o.id]);
+    }
+  }
+  const subtreeCached = (() => {
+    const memo = new Map<string, Set<string>>();
+    const build = (root: string): Set<string> => {
+      const hit = memo.get(root);
+      if (hit) return hit;
+      const seen = new Set<string>([root]);
+      const stack = [root];
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        for (const k of kidsOf.get(cur) ?? []) {
+          if (!seen.has(k)) {
+            seen.add(k);
+            stack.push(k);
+          }
+        }
+      }
+      memo.set(root, seen);
+      return seen;
+    };
+    return build;
+  })();
+  const scopeSub = subtreeCached(scopeId);
   const cids = Object.keys(doc.model.connections).sort();
   const trays: ContextTray[] = [];
   for (const sib of siblings) {
-    const sibSub = subtreeOf(doc, sib.id);
+    const sibSub = subtreeCached(sib.id);
     const involved = new Map<string, { objectId: string; name: string; kind: typeof sib.type }>();
     for (const cid of cids) {
       const c = doc.model.connections[cid];
@@ -583,8 +600,14 @@ function mockDiagramView(doc: SpecDocument, diagramId: string): DiagramView {
   const objects = bids
     .map((b) => doc.model.objects[b])
     .filter((o) => o != null);
+  // Single pass over objects (was one full scan per box).
+  const kidCount = new Map<string, number>();
+  for (const o of Object.values(doc.model.objects)) {
+    const p = o.parentId ?? null;
+    if (p != null) kidCount.set(p, (kidCount.get(p) ?? 0) + 1);
+  }
   const childCounts: Record<string, number> = {};
-  for (const b of bids) childCounts[b] = childrenOf(doc, b).length;
+  for (const b of bids) childCounts[b] = kidCount.get(b) ?? 0;
   const edges = mockDiagramEdges(doc, diagramId);
   const contextTrays = mockContextTrays(doc, diagramId);
   const breadcrumb: { id: string; name: string }[] = [];
@@ -1095,15 +1118,68 @@ function loadStored(): { doc: SpecDocument; rev: number } | null {
   }
 }
 
+let persistTimer: number | null = null;
+let persistQueued = false;
+
+/** Autosave stays off the UI thread: serialize + write debounced and idle,
+ *  never synchronously inside a frame that handles input. */
 function persist(): void {
+  // Small docs keep the synchronous write (tests reload immediately after
+  // mutating); large docs persist off the frame to protect input latency.
   try {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ doc: mock.doc, rev: mock.rev }),
-    );
+    const n =
+      Object.keys(mock.doc.model.objects).length +
+      Object.keys(mock.doc.model.connections).length;
+    if (n <= 300) {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ doc: mock.doc, rev: mock.rev }),
+      );
+      return;
+    }
   } catch {
-    /* storage unavailable */
+    /* fall through to async */
   }
+  persistQueued = true;
+  if (persistTimer != null) return;
+  const write = () => {
+    persistTimer = null;
+    if (!persistQueued) return;
+    persistQueued = false;
+    try {
+      const payload = JSON.stringify({ doc: mock.doc, rev: mock.rev });
+      window.localStorage.setItem(STORAGE_KEY, payload);
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  try {
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+    if (typeof ric === "function") {
+      persistTimer = window.setTimeout(write, 250);
+    } else {
+      persistTimer = window.setTimeout(write, 250);
+    }
+  } catch {
+    persistTimer = window.setTimeout(write, 250);
+  }
+}
+
+try {
+  window.addEventListener("pagehide", () => {
+    if (!persistQueued) return;
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ doc: mock.doc, rev: mock.rev }),
+      );
+      persistQueued = false;
+    } catch {
+      /* storage unavailable */
+    }
+  });
+} catch {
+  /* non-browser */
 }
 
 const mock: MockState = {

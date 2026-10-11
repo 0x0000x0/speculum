@@ -10,6 +10,13 @@ import "./App.css";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import App from "./App";
 
+try {
+  // Parse/eval boundary: all imported modules evaluated, first render next.
+  performance.mark("speculum:module-eval");
+} catch {
+  /* ignore */
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>

@@ -80,6 +80,14 @@
 
 .flow-canvas .spec-node--drill-fade {
   opacity: 0;
+  /* SPEED part 3: out of the paint path once faded (software rendering
+     repaints 500 faded boxes every camera-flight frame otherwise).
+     Visibility flips after the opacity fade (same token, as a delay), so
+     the look is unchanged; removal fades back in normally. */
+  visibility: hidden;
+  transition:
+    opacity var(--sp-motion-fast) var(--sp-motion-ease),
+    visibility 0s linear var(--sp-motion-fast);
 }
 
 /* Swap: the box visibly becomes the tray (fill/border morph ~200ms). */
@@ -434,6 +442,149 @@
 /* Lower (rolled-up) edges are additionally dashed via inline style. */
 .flow-canvas .flow-edge--lower {
   opacity: 0.85;
+}
+
+/* --- perf regime (SPEED part 2): zoomed-out large levels ------------- */
+/* CSS containment keeps pan/zoom frames to compositor work; transitions
+   are off at this scale (a hover sweep would otherwise restart 1000+
+   opacity transitions every move); label pills lose backdrop blur. */
+
+.flow-canvas .react-flow__node {
+  contain: layout style;
+}
+
+.flow-canvas .spec-edge__fo {
+  contain: layout style paint;
+}
+
+.flow-canvas--lod .react-flow__node,
+.flow-canvas--lod .react-flow__edge {
+  transition: none;
+}
+
+.flow-canvas--lod .spec-edge__label,
+.flow-canvas--lod .spec-edge__via {
+  backdrop-filter: none;
+}
+
+.flow-canvas--lod .spec-box {
+  box-shadow: none;
+}
+
+/* Combined edge layer: one path per style class, pointer-transparent. */
+.flow-canvas .react-flow__node.edge-batch-node {
+  pointer-events: none !important;
+}
+
+/* SPEED part 3: the combined layer (~1MB of path for 750 links) is the
+   most expensive thing software rendering repaints, and per-edge links
+   already fade out during the drill camera (see --zooming above). Keep it
+   out of every camera flight frame; it returns at settle with the boxes. */
+.flow-canvas--zooming .react-flow__node.edge-batch-node,
+.flow-canvas--swap .react-flow__node.edge-batch-node {
+  visibility: hidden;
+}
+
+.edge-batch {
+  overflow: visible;
+  display: block;
+  pointer-events: none;
+}
+
+.edge-batch__path {
+  fill: none;
+  stroke: var(--sp-color-edge);
+  stroke-width: var(--sp-edge-stroke);
+  stroke-linecap: round;
+}
+
+.edge-batch__arrow {
+  fill: var(--sp-color-edge);
+  stroke: none;
+}
+
+.edge-batch__group.spec-edge--status-future .edge-batch__path {
+  stroke: var(--sp-color-state-info);
+}
+
+.edge-batch__group.spec-edge--status-future .edge-batch__arrow {
+  fill: var(--sp-color-state-info);
+}
+
+.edge-batch__group.spec-edge--status-deprecated .edge-batch__path {
+  stroke: var(--sp-color-state-warning);
+}
+
+.edge-batch__group.spec-edge--status-deprecated .edge-batch__arrow {
+  fill: var(--sp-color-state-warning);
+}
+
+.edge-batch__group.spec-edge--status-removed .edge-batch__path {
+  stroke: var(--sp-color-state-danger);
+}
+
+.edge-batch__group.spec-edge--status-removed .edge-batch__arrow {
+  fill: var(--sp-color-state-danger);
+}
+
+.edge-batch__group.spec-edge--status-removed {
+  opacity: 0.5;
+}
+
+.edge-batch__path--hi {
+  stroke: var(--sp-color-edge-hi);
+  stroke-width: var(--sp-edge-stroke-hi);
+}
+
+.edge-batch__arrow--hi {
+  fill: var(--sp-color-edge-hi);
+}
+
+/* --- kept level (drill LRU): previous large level stays mounted but
+   fully hidden (NOT RF `hidden`, which would unmount). Display:none keeps
+   the DOM without paint cost; drilling back flips the class instead of
+   remounting hundreds of nodes. */
+
+.flow-canvas .react-flow__node.kept-node {
+  display: none;
+}
+
+/* --- veil hover (perf regime): one translucent layer dims everything,
+   the highlighted subset renders in the overlay above it. Both ignore
+   pointer events so the live canvas keeps receiving input. Chrome
+   (toolbars/zoom/crumbs, z >= 5) stays above and undimmed. */
+
+.hover-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--sp-color-bg-canvas) 75%, transparent);
+}
+
+.hover-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  z-index: 4;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
+.hover-overlay__edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.hover-overlay__box {
+  position: absolute;
+  pointer-events: none;
 }
 
 /* --- hover-highlight dimming (IcePanel-style, M3 first pass) --- */

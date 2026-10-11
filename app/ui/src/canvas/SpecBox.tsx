@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { ObjectKind, Status } from "../model/types";
-import { KIND_LABELS } from "../model/store";
+import { KIND_LABELS, perfNoteRender } from "../model/store";
 import type { TagColor } from "../components/TagPill";
 import "./SpecBox.css";
 
@@ -32,6 +32,11 @@ export interface SpecBoxData extends Record<string, unknown> {
   description?: string;
   onDrill?: (boxId: string, rect: { x: number; y: number; w: number; h: number } | null) => void;
   tier: ZoomTier;
+  /** Perf regime (many boxes, zoomed out): single-element DOM, no icons/handles. */
+  lite?: boolean;
+  /** Static hover-overlay clone: visuals only, no handles/dots (they must
+   *  not register with React Flow twice). */
+  bare?: boolean;
   renaming?: boolean;
   onRename?: (name: string) => void;
   onCancelRename?: () => void;
@@ -186,6 +191,7 @@ function dotStyle(side: DotSide, frac: number): CSSProperties {
 }
 
 function SpecBoxInner({ data }: NodeProps) {
+  perfNoteRender("box");
   const d = data as unknown as SpecBoxData;
   const [draft, setDraft] = useState(d.name);
 
@@ -201,14 +207,57 @@ function SpecBoxInner({ data }: NodeProps) {
     }
   }, [d.renaming]);
 
+  // LOD: far zoom draws the name only (no handles/dots/icons/badge) so
+  // big fitted levels pan/zoom at ~16ms per frame. Mid zoom keeps the full
+  // box (badge included: drills happen there) minus dots/caption/tech,
+  // except in the perf regime (lite: >150 boxes) where mid is also a
+  // single-element box — the drill badge stays so drills keep working.
+  // Near zoom is untouched.
+  // Perf regime (lite, any zoomed-out tier incl. far): single element, no
+  // handles — the batch edge layer never needs React Flow handles (and
+  // 1000 handle registrations doubled the 500-mount commit). The drill
+  // badge stays so drills keep working. SPEED part 3.
+  if (d.lite === true && d.tier !== "near") {
+    const liteKids = typeof d.childCount === "number" && d.childCount > 0;
+    return (
+      <div
+        className={`spec-box spec-box--lite spec-box--kind-${d.kind}`}
+        data-testid={d.bare === true ? undefined : `box-${(data as Record<string, unknown>).__boxId as string}`}
+        title={d.name}
+      >
+        {liteKids && (
+          <button
+            type="button"
+            data-testid={d.bare === true ? undefined : `drill-${d.boxId}`}
+            className="spec-box__drill spec-box__drill--lite nodrag"
+            aria-label={`Open inside ${d.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              d.onDrill?.(d.boxId, null);
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <span className="spec-box__drill-count">{d.childCount}</span>
+          </button>
+        )}
+        <div className="spec-box__title" data-testid={d.bare === true ? undefined : `box-name-${d.boxId}`}>{d.name}</div>
+      </div>
+    );
+  }
   if (d.tier === "far") {
     return (
       <div
         className={`spec-box spec-box--far spec-box--kind-${d.kind}`}
-        data-testid={`box-${(data as Record<string, unknown>).__boxId as string}`}
+        data-testid={d.bare === true ? undefined : `box-${(data as Record<string, unknown>).__boxId as string}`}
+        title={d.name}
       >
-        <Handle type="target" position={Position.Top} id="in-top" className="spec-box__handle" aria-label="Input top" />
-        <Handle type="source" position={Position.Bottom} id="out-bottom" className="spec-box__handle" aria-label="Output bottom" />
+        {d.bare !== true && (
+          <>
+            <Handle type="target" position={Position.Top} id="in-top" className="spec-box__handle" aria-label="Input top" />
+            <Handle type="source" position={Position.Bottom} id="out-bottom" className="spec-box__handle" aria-label="Output bottom" />
+          </>
+        )}
+        <div className="spec-box__title" data-testid={d.bare === true ? undefined : `box-name-${d.boxId}`}>{d.name}</div>
       </div>
     );
   }
@@ -228,7 +277,9 @@ function SpecBoxInner({ data }: NodeProps) {
     .filter(Boolean)
     .join(" ");
 
-  const dots = dotsFor(d.kind);
+  // Mid zoom: no connection dots (hover dots are hidden below ~0.45
+  // zoom); near zoom is untouched.
+  const dots = d.tier === "near" ? dotsFor(d.kind) : [];
   const tagStripColor = d.tags.length > 0 ? d.tags[0].color : null;
 
   const onDrillClick = (e: ReactMouseEvent) => {
@@ -263,13 +314,17 @@ function SpecBoxInner({ data }: NodeProps) {
     <>
     <div
       className={cls}
-      data-testid={`box-${(data as Record<string, unknown>).__boxId as string}`}
+      data-testid={d.bare === true ? undefined : `box-${(data as Record<string, unknown>).__boxId as string}`}
       title={d.description != null && d.description !== "" ? `${d.name} — ${d.description}` : undefined}
     >
-      <Handle type="target" position={Position.Top} id="in-top" className="spec-box__handle" aria-label="Input top" />
-      <Handle type="target" position={Position.Left} id="in-left" className="spec-box__handle" aria-label="Input left" />
-      <Handle type="target" position={Position.Bottom} id="in-bottom" className="spec-box__handle" aria-label="Input bottom" />
-      <Handle type="target" position={Position.Right} id="in-right" className="spec-box__handle" aria-label="Input right" />
+      {d.bare !== true && (
+        <>
+          <Handle type="target" position={Position.Top} id="in-top" className="spec-box__handle" aria-label="Input top" />
+          <Handle type="target" position={Position.Left} id="in-left" className="spec-box__handle" aria-label="Input left" />
+          <Handle type="target" position={Position.Bottom} id="in-bottom" className="spec-box__handle" aria-label="Input bottom" />
+          <Handle type="target" position={Position.Right} id="in-right" className="spec-box__handle" aria-label="Input right" />
+        </>
+      )}
       {tagStripColor != null && (
         <span
           className="spec-box__tagstrip"
@@ -282,7 +337,7 @@ function SpecBoxInner({ data }: NodeProps) {
           {hasKids && (
             <button
               type="button"
-              data-testid={`drill-${d.boxId}`}
+              data-testid={d.bare === true ? undefined : `drill-${d.boxId}`}
               className="spec-box__drill nodrag"
               aria-label={`Open inside ${d.name}`}
               onClick={onDrillClick}
@@ -297,7 +352,7 @@ function SpecBoxInner({ data }: NodeProps) {
         </span>
         <span
           className={`spec-box__dot spec-box__dot--${dotStatus}`}
-          data-testid={`status-${d.boxId}`}
+          data-testid={d.bare === true ? undefined : `status-${d.boxId}`}
           title={STATUS_LABEL[dotStatus] ?? dotStatus}
           aria-label={`Status ${STATUS_LABEL[dotStatus] ?? dotStatus}`}
         />
@@ -309,26 +364,30 @@ function SpecBoxInner({ data }: NodeProps) {
         {d.renaming ? (
           renameInput
         ) : (
-          <div className="spec-box__title" data-testid={`box-name-${d.boxId}`}>{d.name}</div>
+          <div className="spec-box__title" data-testid={d.bare === true ? undefined : `box-name-${d.boxId}`}>{d.name}</div>
         )}
       </div>
-      {wide && d.caption !== "" && (
+      {wide && d.tier === "near" && d.caption !== "" && (
         <div className="spec-box__caption">{d.caption}</div>
       )}
-      <div className="spec-box__kind" data-testid={`box-kind-${d.boxId}`}>
+      <div className="spec-box__kind" data-testid={d.bare === true ? undefined : `box-kind-${d.boxId}`}>
         {KIND_LABELS[d.kind]}
       </div>
-      {wide && (
+      {wide && d.tier === "near" && (
         <div className="spec-box__tech">
           {`[${KIND_LABELS[d.kind]}${d.tech ? `: ${d.tech}` : ""}]`}
         </div>
       )}
-      <Handle type="source" position={Position.Top} id="out-top" className="spec-box__handle" aria-label="Output top" />
-      <Handle type="source" position={Position.Bottom} id="out-bottom" className="spec-box__handle" aria-label="Output bottom" />
-      <Handle type="source" position={Position.Left} id="out-left" className="spec-box__handle" aria-label="Output left" />
-      <Handle type="source" position={Position.Right} id="out-right" className="spec-box__handle" aria-label="Output right" />
+      {d.bare !== true && (
+        <>
+          <Handle type="source" position={Position.Top} id="out-top" className="spec-box__handle" aria-label="Output top" />
+          <Handle type="source" position={Position.Bottom} id="out-bottom" className="spec-box__handle" aria-label="Output bottom" />
+          <Handle type="source" position={Position.Left} id="out-left" className="spec-box__handle" aria-label="Output left" />
+          <Handle type="source" position={Position.Right} id="out-right" className="spec-box__handle" aria-label="Output right" />
+        </>
+      )}
     </div>
-    {dots.length > 0 && (
+    {d.bare !== true && dots.length > 0 && (
       <div className="spec-dots" aria-hidden="false">
         {dots.map((dot) => (
           <span
@@ -352,5 +411,42 @@ function SpecBoxInner({ data }: NodeProps) {
   );
 }
 
-const SpecBox = memo(SpecBoxInner);
+function specBoxEqual(
+  prev: Readonly<NodeProps>,
+  next: Readonly<NodeProps>,
+): boolean {
+  const a = prev.data as unknown as SpecBoxData;
+  const b = next.data as unknown as SpecBoxData;
+  if (prev.selected !== next.selected) return false;
+  if (prev.dragging !== next.dragging) return false;
+  if (a.boxId !== b.boxId) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.name !== b.name) return false;
+  if (a.caption !== b.caption) return false;
+  if (a.external !== b.external) return false;
+  if (a.status !== b.status) return false;
+  if (a.childCount !== b.childCount) return false;
+  // SPEED part 3: the lite DOM ignores far-vs-mid (single element in both),
+  // so a tier flip there is not a render (wheel ticks stay at zero renders).
+  const aLiteTier = (a.lite ?? false) && a.tier !== "near" ? "lite" : a.tier;
+  const bLiteTier = (b.lite ?? false) && b.tier !== "near" ? "lite" : b.tier;
+  if (aLiteTier !== bLiteTier) return false;
+  if ((a.lite ?? false) !== (b.lite ?? false)) return false;
+  if ((a.bare ?? false) !== (b.bare ?? false)) return false;
+  if (a.zoomable !== b.zoomable) return false;
+  if (a.wide !== b.wide) return false;
+  if (a.tech !== b.tech) return false;
+  if (a.description !== b.description) return false;
+  if (a.renaming !== b.renaming) return false;
+  if (a.candidate !== b.candidate) return false;
+  if ((a.tags?.length ?? 0) !== (b.tags?.length ?? 0)) return false;
+  for (let i = 0; i < (a.tags?.length ?? 0); i++) {
+    if (a.tags[i].label !== b.tags[i].label) return false;
+    if (a.tags[i].color !== b.tags[i].color) return false;
+  }
+  // Callbacks are stable refs looked up by id (never inline closures).
+  return true;
+}
+
+const SpecBox = memo(SpecBoxInner, specBoxEqual);
 export default SpecBox;

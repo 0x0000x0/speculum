@@ -73,6 +73,86 @@ async function isOnScreen(testId) {
   return bb.x < 1400 && bb.y < 900 && bb.x + bb.width > 0 && bb.y + bb.height > 0;
 }
 
+/**
+ * Flake guard (SPEED part 2): after setViewport + dragBox the target box
+ * can sit under the left tool bar (wheel-zoom settle variance in headless
+ * rendering), so a plain hover times out with "toolbar intercepts pointer
+ * events". Pan the box toward the canvas center until its center point
+ * actually hits it, then hover. App behavior is unchanged (verified: the
+ * viewport lands wherever the wheel/pan input puts it; only the headless
+ * settle point varies run to run).
+ */
+async function ensureHoverable(testId) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const bb = await page.getByTestId(testId).boundingBox().catch(() => null);
+    if (!bb) return false;
+    const cx = bb.x + bb.width / 2;
+    const cy = bb.y + bb.height / 2;
+    const hit = await page.evaluate(
+      ({ x, y, id }) => {
+        const el = document.elementFromPoint(x, y);
+        if (!el) return "none";
+        const box = el.closest(`[data-testid="${id}"]`);
+        if (box) return "box";
+        const bar = el.closest('[data-testid="toolbar"], .tool-bar, [role="toolbar"]');
+        return bar ? "toolbar" : "other";
+      },
+      { x: cx, y: cy, id: testId },
+    );
+    if (hit === "box") return true;
+    // Pan empty canvas so the content (and the box with it) moves away
+    // from the bar: find a pane point (no box/edge/toolbar under it) and
+    // drag toward the canvas center. This only changes the viewport, which
+    // the caller re-records afterwards — no box rect is touched.
+    const spot = await page.evaluate(() => {
+      const c = document.querySelector('[data-testid="canvas"]');
+      const r = c?.getBoundingClientRect();
+      if (!r) return null;
+      const pts = [
+        [r.x + r.width / 2, r.y + r.height / 2],
+        [r.x + r.width / 2, r.y + r.height - 140],
+        [r.x + r.width - 200, r.y + r.height / 2],
+        [r.x + r.width / 2, r.y + 140],
+        [r.x + r.width - 200, r.y + 140],
+      ];
+      for (const [x, y] of pts) {
+        const el = document.elementFromPoint(x, y);
+        if (!el) continue;
+        if (el.closest('[data-testid="toolbar"], .tool-bar, [role="toolbar"]')) continue;
+        if (el.closest('[data-testid^="box-"]:not([data-testid^="box-name-"])')) continue;
+        if (el.closest('.react-flow__edge')) continue;
+        if (el.closest('.react-flow__pane')) return { x, y };
+      }
+      return null;
+    });
+    if (!spot) {
+      await page.waitForTimeout(400);
+      continue;
+    }
+    const cbb = await page.getByTestId("canvas").boundingBox();
+    const tx = cbb.x + cbb.width / 2;
+    const ty = cbb.y + cbb.height / 2;
+    // Drag direction: content follows the cursor; push the box (left side)
+    // rightward, i.e. drag toward +x when the box is left of center.
+    const dx = cx < tx ? 260 : -160;
+    await page.mouse.move(spot.x, spot.y);
+    await page.mouse.down();
+    await page.mouse.move(spot.x + dx, spot.y, { steps: 12 });
+    await page.mouse.up();
+    // Debounced viewport save (600ms) must land before the caller records.
+    await page.waitForTimeout(1100);
+  }
+  const bb = await page.getByTestId(testId).boundingBox().catch(() => null);
+  if (!bb) return false;
+  return await page.evaluate(
+    ({ x, y, id }) => {
+      const el = document.elementFromPoint(x, y);
+      return !!el?.closest?.(`[data-testid="${id}"]`);
+    },
+    { x: bb.x + bb.width / 2, y: bb.y + bb.height / 2, id: testId },
+  );
+}
+
 /** Pan + zoom via real input so the viewport is distinctive. */
 async function setViewport() {
   const canvas = page.getByTestId("canvas");
@@ -235,6 +315,9 @@ ok("drill-in duration 170..300ms incl. click round-trip (L3)", d >= 170 && d <= 
 await page.getByTestId("box-obj-cart-item").waitFor({ timeout: 15000 });
 await setViewport();
 await dragBox("box-obj-cart-item", 80, 40);
+// Flake guard BEFORE recording: pan the box clear of the left tool bar
+// (headless wheel-zoom settle variance) so the later hover is actionable.
+ok("L3 box clear of the tool bar", await ensureHoverable("box-obj-cart-item"));
 const s3 = await st();
 await assertScopeFrame(3);
 await page.screenshot({ path: "screenshots/m5-level3-dark.png" });

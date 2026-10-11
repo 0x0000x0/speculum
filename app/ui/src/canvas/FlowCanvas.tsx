@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -11,6 +11,7 @@ import {
   type Edge as FlowEdge,
   type Node as FlowNode,
   type NodeChange,
+  type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useTheme } from "../theme/ThemeProvider";
@@ -67,9 +68,11 @@ import {
   setHover,
   setLiveViewport,
   setPendingLink,
+  getSelection,
   setQuickAdd,
   setRenaming,
   setSelectedEdge,
+  subscribeSelection,
   setTool,
   saveViewport,
   showToast,
@@ -179,7 +182,55 @@ function CtxChildNode({ data }: { data: CtxChildData }) {
 }
 const MemoCtxChild = memo(CtxChildNode);
 
-const nodeTypes = { specBox: SpecBox, scopeFrame: MemoScopeFrame, ctxTray: MemoCtxTray, ctxChild: MemoCtxChild };
+/**
+ * Perf-regime edge layer (mid/far tiers, >150 boxes): ALL edges as ONE
+ * combined SVG path per style class instead of hundreds of edge
+ * components. Lives in a single React Flow node at the content origin so
+ * it pans/zooms with the canvas; pointer events pass through (edge
+ * hover/click select stay available at near tier). Highlighted edges
+ * (hover/selection) draw as one overlay path on top.
+ */
+export interface BatchGroup {
+  cls: string;
+  d: string;
+  arrowD: string;
+}
+export interface BatchEdgesData extends Record<string, unknown> {
+  groups: BatchGroup[];
+  hi: BatchGroup[];
+  ox: number;
+  oy: number;
+}
+function BatchEdgesNode({ data }: { data: BatchEdgesData }) {
+  return (
+    <svg
+      className="edge-batch"
+      data-testid="edge-batch"
+      width={1}
+      height={1}
+      aria-hidden="true"
+    >
+      <g transform={`translate(${-data.ox},${-data.oy})`}>
+        {data.groups.map((g, i) => (
+          <g key={i} className={g.cls}>
+            {g.d !== "" && <path className="edge-batch__path" d={g.d} />}
+            {g.arrowD !== "" && <path className="edge-batch__arrow" d={g.arrowD} />}
+          </g>
+        ))}
+        {data.hi.map((g, i) => (
+          <g key={`hi-${i}`} className={g.cls}>
+            {g.d !== "" && <path className="edge-batch__path edge-batch__path--hi" d={g.d} />}
+            {g.arrowD !== "" && <path className="edge-batch__arrow edge-batch__arrow--hi" d={g.arrowD} />}
+          </g>
+        ))}
+      </g>
+    </svg>
+  );
+}
+const MemoBatchEdges = memo(BatchEdgesNode);
+type BatchNodeType = FlowNode<BatchEdgesData, "batchEdges">;
+
+const nodeTypes = { specBox: SpecBox, scopeFrame: MemoScopeFrame, ctxTray: MemoCtxTray, ctxChild: MemoCtxChild, batchEdges: MemoBatchEdges };
 const edgeTypes = { specEdge: SpecEdge };
 
 /** Live drag preview: a dashed line with an arrowhead following the pointer. */
@@ -232,9 +283,84 @@ function scopeSub(
 }
 
 function tierOf(zoom: number): ZoomTier {
-  if (zoom < 0.2) return "far";
-  if (zoom < 0.4) return "mid";
+  if (zoom < 0.25) return "far";
+  if (zoom < 0.45) return "mid";
   return "near";
+}
+
+/**
+ * Tier-quantized zoom for edge presentation (arrowheads, label rules):
+ * geometry memos key on the tier, so wheel ticks within a tier never
+ * recompute edge geometry — zoom only re-renders on a tier change.
+ */
+function tierZoomOf(tier: ZoomTier): number {
+  return tier === "far" ? 0.15 : tier === "mid" ? 0.35 : 1;
+}
+
+/** Cheap rolling hash over persisted boxes (drill-return cache key). */
+function boxesHashOf(boxes: Record<string, Rect>): string {
+  let h1 = 0;
+  let h2 = 0;
+  let n = 0;
+  for (const id of Object.keys(boxes).sort()) {
+    const r = boxes[id];
+    n += 1;
+    const s = `${id}:${r.x},${r.y},${r.w},${r.h};`;
+    for (let i = 0; i < s.length; i++) {
+      h1 = (h1 * 31 + s.charCodeAt(i)) | 0;
+      h2 = (h2 * 17 + s.charCodeAt(i) * (i + 1)) | 0;
+    }
+  }
+  return `${n}:${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
+}
+
+/** Above this many boxes the canvas switches to the perf regime
+ *  (lite boxes, batched edges, no per-frame transitions). */
+const PERF_REGIME_NODES = 150;
+
+// SPEED part 3: the kept-level LRU co-mounted 500 hidden nodes during
+// every drill (hideKeptNodes allocated 500 new objects + React reconciled
+// ~1000 nodes). Measured: drill 350ms / 2994 box renders / 200ms longest
+// frame. Dropping the LRU restores single-level DOM; drill-back remounts
+// from the node/edge caches (part 1: ~230ms).
+
+/**
+ * Fit framing for a set of persisted rects in a cw×ch container (~20%
+ * margin, capped at 1.25): the same framing as the layout-effect sync fit,
+ * usable BEFORE first render so the mount lands in the final LOD tier.
+ */
+function fitViewportFor(
+  rects: Rect[],
+  cw: number,
+  ch: number,
+): { x: number; y: number; zoom: number } | null {
+  if (rects.length === 0 || cw <= 0 || ch <= 0) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const r of rects) {
+    if (r.x < x0) x0 = r.x;
+    if (r.y < y0) y0 = r.y;
+    if (r.x + r.w > x1) x1 = r.x + r.w;
+    if (r.y + r.h > y1) y1 = r.y + r.h;
+  }
+  const bw = Math.max(x1 - x0, 1);
+  const bh = Math.max(y1 - y0, 1);
+  const z = Math.min(
+    Math.max(Math.min((cw * 0.8) / bw, (ch * 0.8) / bh), 0.1),
+    1.25,
+  );
+  const cx = x0 + bw / 2;
+  const cy = y0 + bh / 2;
+  return { x: cw / 2 - cx * z, y: ch / 2 - cy * z, zoom: z };
+}
+
+/** Quantized zoom for geometry memos: edge/node rebuilds only run when the
+ *  bucket changes, so pan frames and fractional wheel deltas never recompute
+ *  edge geometry. */
+function zoomBucketOf(zoom: number): number {
+  return Math.round(zoom * 20) / 20;
 }
 
 /** Persisted-box plan for the faint neighbour trays (spec 4.6). */
@@ -314,6 +440,8 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   const { view, diagramId, selection, hover, renamingId, error, status } = model;
   const instance = useReactFlow();
   const [zoom, setZoom] = useState(1);
+  // Diagram the zoom state was seeded for (render-phase seeding below).
+  const [zoomSeedId, setZoomSeedId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const draggingRef = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -358,6 +486,93 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   const [ghost, setGhost] = useState<{ kind: string; x: number; y: number } | null>(null);
 
   const tier = tierOf(zoom);
+  // Quantized zoom: geometry memos key on the TIER, so fractional wheel
+  // deltas and pan frames never recompute edge geometry. The bucket only
+  // gates the parent zoom callback (cheap), never geometry.
+  const zoomB = zoomBucketOf(zoom);
+  const tierZoom = tierZoomOf(tier);
+  // Perf regime (SPEED part 2): lite boxes + one combined edge path layer.
+  const nodeCount = view == null ? 0 : Object.keys(view.diagram.boxes).length;
+  const batchEdges = tier !== "near" && nodeCount > PERF_REGIME_NODES;
+  // Deferred second paint: labels/badges/via pills and context trays are
+  // not needed for the first frame; they join right after first paint so
+  // open stays under budget. Reset on every diagram change.
+  const [labelsReady, setLabelsReady] = useState(false);
+  const [ctxReady, setCtxReady] = useState(false);
+  useEffect(() => {
+    setLabelsReady(false);
+    setCtxReady(false);
+    let t: number | null = null;
+    const raf = requestAnimationFrame(() => {
+      t = window.setTimeout(() => {
+        setLabelsReady(true);
+        setCtxReady(true);
+      }, 20);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      if (t != null) window.clearTimeout(t);
+    };
+  }, [view?.diagram.id]);
+  const ctxReadyRef = useRef(ctxReady);
+  ctxReadyRef.current = ctxReady;
+  // Mount once at the final viewport AND tier: the saved viewport — or,
+  // for a fresh level, the fitted viewport computed from the persisted
+  // rects BEFORE first render — seeds both React Flow's initial viewport
+  // and the zoom state during render, so the first paint already mounts
+  // the right LOD variant (no near-mode mount followed by a mid-mode
+  // rebuild). The layout effect below still corrects to the measured
+  // container; a seed in the right tier makes that correction free.
+  if (view != null && zoomSeedId !== view.diagram.id) {
+    setZoomSeedId(view.diagram.id);
+    const saved = view.diagram.viewport;
+    if (saved != null && saved.zoom > 0) {
+      setZoom(saved.zoom);
+    } else {
+      try {
+        const seed = fitViewportFor(
+          Object.values(view.diagram.boxes),
+          window.innerWidth - 380,
+          window.innerHeight - 160,
+        );
+        if (seed != null) setZoom(seed.zoom);
+      } catch {
+        /* keep 1 */
+      }
+    }
+  }
+  const defaultViewport = useMemo(() => {
+    const v = view;
+    if (v == null) return undefined;
+    const saved = v.diagram.viewport;
+    if (saved != null && saved.zoom > 0) {
+      return { x: saved.x, y: saved.y, zoom: saved.zoom };
+    }
+    try {
+      const cw = window.innerWidth - 380;
+      const ch = window.innerHeight - 160;
+      return fitViewportFor(Object.values(v.diagram.boxes), cw, ch) ?? undefined;
+    } catch {
+      return undefined;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view?.diagram.id]);
+  const lastZoomBucketRef = useRef(zoomB);
+  // Latest programmatic viewport zoom, flushed to state when the camera
+  // settles (see flushCameraZoom).
+  const pendingZoomRef = useRef<number | null>(null);
+  const flushCameraZoom = useCallback(() => {
+    const z = pendingZoomRef.current;
+    pendingZoomRef.current = null;
+    if (z == null) return;
+    setZoom(z);
+    const b = zoomBucketOf(z);
+    if (b !== lastZoomBucketRef.current) {
+      lastZoomBucketRef.current = b;
+      onZoomRef.current(z);
+    }
+  }, []);
+  const edgeCacheRef = useRef(new Map<string, { sig: string; edge: FlowEdge }>());
 
   // ---- node building -------------------------------------------------------
   // All inputs are mirrored into refs so the builder never closes over
@@ -367,6 +582,16 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   docRef.current = model.doc;
   const selRef = useRef(selection);
   selRef.current = selection;
+  // Selection-only emits (select()) skip full-snapshot subscribers, so the
+  // ref is also fed by the selection subscription (keyboard shortcuts and
+  // node builds always see the live selection without re-rendering).
+  useEffect(
+    () =>
+      subscribeSelection(() => {
+        selRef.current = getSelection();
+      }),
+    [],
+  );
   const renRef = useRef(renamingId);
   renRef.current = renamingId;
   const tierRef = useRef(tier);
@@ -381,6 +606,10 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   );
   const frameConnectRef = useRef((_e: React.MouseEvent): void => {});
 
+  // Stable node identity: per-id cache keyed on a cheap signature. Only
+  // nodes whose data actually changed get new objects, so React.memo +
+  // React Flow skip everything else (hover/selection never rebuild arrays).
+  const nodeCacheRef = useRef(new Map<string, { sig: string; node: AnyNode }>());
   const buildNodes = useCallback((): AnyNode[] => {
     const v = viewRef.current;
     const doc = docRef.current;
@@ -389,6 +618,16 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     const tr = tierRef.current;
     const cm = connectRef.current;
     if (v == null) return [];
+    const cache = nodeCacheRef.current;
+    const seen = new Set<string>();
+    const take = (id: string, sig: string, make: () => AnyNode): AnyNode => {
+      seen.add(id);
+      const hit = cache.get(id);
+      if (hit != null && hit.sig === sig) return hit.node;
+      const node = make();
+      cache.set(id, { sig, node });
+      return node;
+    };
     const out: AnyNode[] = [];
     const ids = Object.keys(v.diagram.boxes).sort();
     // Scope frame: wraps all boxes + frame padding, behind everything.
@@ -398,26 +637,30 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       const rects = ids.map((id) => v.diagram.boxes[id]).filter((r) => r != null);
       const frame = frameRectOf(rects);
       if (frame != null) {
-        out.push({
-          id: "__frame__",
-          type: "scopeFrame",
-          position: { x: frame.x, y: frame.y },
-          style: {
-            width: Math.max(frame.w, 40),
-            height: Math.max(frame.h, 40),
-          },
-          // Behind boxes via DOM order (first node); pointer-events are
-          // disabled on the wrapper (see .spec-frame-node) so only the
-          // parent port stays clickable above the edge layer.
-          className: "spec-frame-node",
-          data: {
-            label: scope.name,
-            sub: scopeSub(docRef.current, scope),
-            onConnectStart: (e: React.MouseEvent) => frameConnectRef.current(e),
-          },
-          selectable: false,
-          draggable: false,
-        });
+        const sub = scopeSub(docRef.current, scope);
+        const fsig = `frame:${frame.x},${frame.y},${frame.w},${frame.h}:${scope.name}:${sub}`;
+        out.push(
+          take("__frame__", fsig, () => ({
+            id: "__frame__",
+            type: "scopeFrame",
+            position: { x: frame.x, y: frame.y },
+            style: {
+              width: Math.max(frame.w, 40),
+              height: Math.max(frame.h, 40),
+            },
+            // Behind boxes via DOM order (first node); pointer-events are
+            // disabled on the wrapper (see .spec-frame-node) so only the
+            // parent port stays clickable above the edge layer.
+            className: "spec-frame-node",
+            data: {
+              label: scope.name,
+              sub,
+              onConnectStart: (e: React.MouseEvent) => frameConnectRef.current(e),
+            },
+            selectable: false,
+            draggable: false,
+          })),
+        );
       }
     }
     const byId = new Map(v.objects.map((o) => [o.id, o]));
@@ -433,49 +676,129 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       const obj = doc.model.objects[id] as unknown as
         | { technologies?: string[]; description?: string }
         | undefined;
-      out.push({
-        id,
-        type: "specBox",
-        position: { x: r.x, y: r.y },
-        style: { width: Math.max(r.w, 40), height: Math.max(r.h, 40) },
-        zIndex: o.type === "group" ? -1 : undefined,
-        selected: sel.includes(id),
-        data: {
-          __boxId: id,
-          boxId: id,
-          kind: o.type,
-          name: o.name,
-          caption: o.caption,
-          tags,
-          external: o.external,
-          status: o.status,
-          childCount: kids,
-          tier: tr,
-          zoomable: canContain(o.type) || kids > 0,
-          wide: r.w > 150,
-          tech: obj?.technologies?.[0] ?? "",
-          description: obj?.description ?? "",
-          onDrill: (boxId: string, rect: ScreenRect | null) =>
-            drillCbRef.current(boxId, rect),
-          renaming: ren === id,
-          onRename: (name: string) => {
-            void renameObject(id, name);
+      const tagSig = tags.map((t) => `${t.label}=${t.color}`).join(";");
+      const selected = sel.includes(id);
+      const renaming = ren === id;
+      const candidate = cm?.candidate === id;
+      const tech = obj?.technologies?.[0] ?? "";
+      const description = obj?.description ?? "";
+      const zoomable = canContain(o.type) || kids > 0;
+      const wide = r.w > 150;
+      // Lite perf regime is decided per build (zoomed-out + many boxes);
+      // it only changes the DOM weight, never the model content.
+      const lite = tr !== "near" && ids.length > PERF_REGIME_NODES;
+      // SPEED part 3: the lite DOM ignores the tier (single-element box in
+      // both far and mid), so far<->mid wheel ticks must not invalidate the
+      // cache: 500 identical re-renders per tick (~1500 box renders across
+      // the perf-check zoom sweep). The LOD key is "lite" for both.
+      const lodKey = lite ? "lite" : tr;
+      const sig = [
+        `${r.x},${r.y},${r.w},${r.h}`, o.type, o.name, o.caption,
+        String(o.external), String(o.status), String(kids), lodKey,
+        String(zoomable), String(wide), tech, description,
+        selected ? "s1" : "s0", renaming ? "r1" : "r0",
+        candidate ? "c1" : "c0", tagSig,
+        lite ? "l1" : "l0",
+      ].join("|");
+      out.push(
+        take(id, sig, () => ({
+          id,
+          type: "specBox",
+          position: { x: r.x, y: r.y },
+          style: { width: Math.max(r.w, 40), height: Math.max(r.h, 40) },
+          zIndex: o.type === "group" ? -1 : undefined,
+          selected,
+          data: {
+            __boxId: id,
+            boxId: id,
+            kind: o.type,
+            name: o.name,
+            caption: o.caption,
+            tags,
+            external: o.external,
+            status: o.status,
+            childCount: kids,
+            tier: tr,
+            lite,
+            zoomable,
+            wide,
+            tech,
+            description,
+            // Stable by id: handlers resolve through refs, so a cached
+            // node never closes over stale data.
+            onDrill: (boxId: string, rect: ScreenRect | null) =>
+              drillCbRef.current(boxId, rect),
+            renaming,
+            onRename: (name: string) => {
+              void renameObject(id, name);
+            },
+            onCancelRename: () => setRenaming(null),
+            candidate,
+            onConnectStart: (boxId: string, e: React.MouseEvent) =>
+              connectStartRef.current(boxId, e),
           },
-          onCancelRename: () => setRenaming(null),
-          candidate: cm?.candidate === id,
-          onConnectStart: (boxId: string, e: React.MouseEvent) =>
-            connectStartRef.current(boxId, e),
-        },
-      });
+        })),
+      );
     }
     // Faint neighbour trays (spec 4.6): placed outside the main tray from
     // the PERSISTED boxes (stable mid-drag, like the frame node which the
-    // canvas resizes imperatively during drags).
-    appendCtxNodes(out, v, doc);
+    // canvas resizes imperatively during drags). Deferred to the second
+    // paint (ctxReady) so open mounts boxes + edges first.
+    const beforeCtx = out.length;
+    if (ctxReadyRef.current) appendCtxNodes(out, v, doc);
+    // Cache ctx/tray nodes by signature too (they are rebuilt wholesale by
+    // appendCtxNodes; reuse identical objects across rebuilds).
+    for (let i = beforeCtx; i < out.length; i++) {
+      const n = out[i];
+      const sig = `ctx:${n.id}:${n.position.x},${n.position.y}:${JSON.stringify(n.data)}`;
+      const hit = cache.get(n.id);
+      if (hit != null && hit.sig === sig) {
+        out[i] = hit.node;
+      } else {
+        cache.set(n.id, { sig, node: n });
+      }
+      seen.add(n.id);
+    }
+    // Evict ids that left the diagram so the cache cannot grow stale.
+    for (const key of [...cache.keys()]) {
+      if (!seen.has(key)) cache.delete(key);
+    }
     return out;
   }, []);
 
   const [baseNodes, setBaseNodes, onNodesChange] = useNodesState<AnyNode>([]);
+  // Single-level DOM (SPEED part 3): no kept-level co-mount.
+  const renderedDiagramRef = useRef<string | null>(null);
+  // Hover intent: a 30ms settle so fast sweeps never commit per-box
+  // highlight work (enter+leave during a sweep just replace the pending
+  // value); dwelling hovers land 30ms later (checks wait 300ms+).
+  const hoverTimer = useRef<number | null>(null);
+  const queueHover = useCallback((id: string | null) => {
+    if (hoverTimer.current != null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    hoverTimer.current = window.setTimeout(() => {
+      hoverTimer.current = null;
+      setHover(id);
+    }, 30);
+  }, []);
+  useEffect(
+    () => () => {
+      if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current);
+    },
+    [],
+  );
+  // Drag positions coalesced to one state write per frame (a single
+  // mousemove burst otherwise recomputes all edge geometry per event).
+  const dragRaf = useRef<number | null>(null);
+  const pendingDragPos = useRef<Record<string, { x: number; y: number }>>({});
+  useEffect(
+    () => () => {
+      if (dragRaf.current != null) cancelAnimationFrame(dragRaf.current);
+    },
+    [],
+  );
 
   // Live drag positions (flow coords) keyed by box id. Updated from every
   // position change so the scope frame + edges follow the drag each frame;
@@ -484,14 +807,22 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   const handleNodesChange = useCallback(
     (changes: NodeChange<AnyNode>[]) => {
       onNodesChange(changes);
-      const pos: Record<string, { x: number; y: number }> = {};
+      let any = false;
       for (const ch of changes) {
         if (ch.type === "position" && ch.position != null) {
-          pos[ch.id] = { x: ch.position.x, y: ch.position.y };
+          pendingDragPos.current[ch.id] = { x: ch.position.x, y: ch.position.y };
+          any = true;
         }
       }
-      if (Object.keys(pos).length > 0) {
-        setDragPos((prev) => ({ ...prev, ...pos }));
+      if (any && dragRaf.current == null) {
+        dragRaf.current = requestAnimationFrame(() => {
+          dragRaf.current = null;
+          const pos = pendingDragPos.current;
+          pendingDragPos.current = {};
+          if (Object.keys(pos).length > 0) {
+            setDragPos((prev) => ({ ...prev, ...pos }));
+          }
+        });
       }
     },
     [onNodesChange],
@@ -600,8 +931,18 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         .map((t) => `${t.objectId}[${t.children.map((c) => c.objectId).join(",")}]`)
         .join(";")
     : "";
+  // NOTE: selection + edge selection are NOT part of the rebuild key:
+  // they are applied as a cheap identity-preserving overlay (below) and
+  // as direct DOM highlight, so select/hover never rebuild node/edge
+  // arrays, never re-run layout, and never recompute edge geometry.
+  // SPEED part 3: ctxReady is ignored when the level has no trays (perf
+  // docs) so the deferred second paint does not rebuild 500 nodes twice.
+  // The drill camera state is also excluded: the zoom-in beat runs on the
+  // old level (DOM-direct fade, no rebuild) and the new level mounts once
+  // from the view (including it rebuilt all 500 nodes before navigation).
+  const hasCtxTrays = (view?.contextTrays?.length ?? 0) > 0;
   const viewKey = view
-    ? `${view.diagram.id}:${model.rev}:${selection.join(",")}:${renamingId}:${tier}:${selectedEdges.join(",")}:${model.connectMode == null ? "" : `${model.connectMode.source ?? ""}>${model.connectMode.candidate ?? ""}`}:${ctxSig}:${model.drill != null ? `${model.drill.dir}:${model.drill.boxId ?? ""}` : ""}`
+    ? `${view.diagram.id}:${model.rev}:${renamingId}:${tier}:${hasCtxTrays && ctxReady ? "ctx1" : "ctx0"}:${model.connectMode == null ? "" : `${model.connectMode.source ?? ""}>${model.connectMode.candidate ?? ""}`}:${ctxSig}`
     : "none";
   const lastKey = useRef("");
   const viewKeyRef = useRef(viewKey);
@@ -609,8 +950,39 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   useEffect(() => {
     if (draggingRef.current || pointerDownRef.current) return;
     if (lastKey.current === viewKey) return;
+    const incomingId = viewRef.current?.diagram.id ?? null;
     lastKey.current = viewKey;
-    setBaseNodes(buildNodes());
+    const prevId = renderedDiagramRef.current;
+    const navigated = incomingId != null && prevId != null && incomingId !== prevId;
+    if (navigated) {
+      // View-only edge/box highlights belong to the old level.
+      setSelectedEdges([]);
+      setHoveredEdge(null);
+      if (hoverTimer.current != null) {
+        window.clearTimeout(hoverTimer.current);
+        hoverTimer.current = null;
+      }
+      setHover(null);
+    }
+    // Concurrent swap: the new level renders without blocking input or the
+    // running camera animation. Single-level DOM: the old level unmounts
+    // inside the animation window; drill-back remounts from caches.
+    // SPEED part 3: skip the write when the build is ref-identical (wheel
+    // tier crossings with a canonicalized LOD key): handing React Flow a
+    // new array of identical refs still re-rendered ~130 boxes per tick.
+    startTransition(() => {
+      const built = buildNodes();
+      setBaseNodes((prev) => {
+        if (
+          prev.length === built.length &&
+          prev.every((n, i) => n === built[i])
+        ) {
+          return prev;
+        }
+        return built;
+      });
+      if (incomingId != null) renderedDiagramRef.current = incomingId;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewKey]);
   useEffect(() => {
@@ -622,7 +994,9 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       const key = viewKeyRef.current;
       if (lastKey.current !== key) {
         lastKey.current = key;
-        setBaseNodes(buildNodes());
+        startTransition(() => {
+          setBaseNodes(buildNodes());
+        });
       }
     };
     window.addEventListener("mousedown", dn, true);
@@ -633,6 +1007,26 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Selection overlay: applies the `selected` flag without rebuilding data
+  // (identity-preserving map: only boxes whose flag actually flips get a new
+  // object, so a select touches at most two nodes and never edge geometry).
+  const selSig = selection.join(",");
+  useEffect(() => {
+    const wanted = new Set(selection);
+    setBaseNodes((prev) => {
+      let changed = false;
+      const next = prev.map((n) => {
+        if (n.type !== "specBox") return n;
+        const want = wanted.has(n.id);
+        if ((n.selected ?? false) === want) return n;
+        changed = true;
+        return { ...n, selected: want };
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selSig]);
 
   // ---- drill camera transition (spec 4.7) ------------------------------------
   // Replaces the cloned-box overlay: the camera zooms centred on the box
@@ -754,6 +1148,18 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
 
   const onDrillBadge = useCallback(
     (boxId: string, screenRect: ScreenRect | null) => {
+      // Synchronous fade on the click frame (before the backend round-trip):
+      // the camera zoom effect follows on the drill state commit.
+      try {
+        canvasRef.current?.querySelectorAll(".react-flow__node").forEach((el) => {
+          (el as HTMLElement).classList.toggle(
+            "spec-node--drill-fade",
+            (el as HTMLElement).getAttribute("data-id") !== boxId,
+          );
+        });
+      } catch {
+        /* fade must never break navigation */
+      }
       const c = canvasRef.current?.getBoundingClientRect() ?? null;
       const rect =
         screenRect && c
@@ -800,8 +1206,11 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         };
         runProgrammatic(120);
         instance.setViewport(v2);
-        setZoom(v2.zoom);
-        onZoomRef.current(v2.zoom);
+        // SPEED part 3: the preset zoom stays frozen (stashed, no render)
+        // so the new level keeps the mount-seeded LOD tier through the
+        // transient preset; it syncs once at done. setZoom here rebuilt all
+        // 500 nodes mid-animation.
+        pendingZoomRef.current = v2.zoom;
       } else if (d.dir === "up" && swap.frameFlow != null) {
         // Reverse: land the old frame's screen rect on the box we came
         // from (drill.boxId = the previous scope, boxed on the parent).
@@ -820,8 +1229,8 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         };
         runProgrammatic(120);
         instance.setViewport(v2);
-        setZoom(v2.zoom);
-        onZoomRef.current(v2.zoom);
+        // SPEED part 3: frozen like the drill-in preset above.
+        pendingZoomRef.current = v2.zoom;
       } else {
         return false;
       }
@@ -853,6 +1262,9 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         const vv = viewRef.current;
         const saved = vv?.diagram.viewport;
         setDrillPhase(d.dir === "in" ? "in-settle" : "up-settle");
+        // Frozen through the settle flight too: the camera is programmatic
+        // (onMove stashes), so no per-frame geometry builds; one sync at
+        // done lands the settled tier.
         runProgrammatic(280);
         if (saved && saved.zoom > 0) {
           const cx = (cw / 2 - saved.x) / saved.zoom;
@@ -878,8 +1290,10 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       swapRef.current = null;
       swappedRef.current = false;
       setDrillPhase("idle");
-      // Persist the settled viewport (full fit incl. context trays) so a
-      // later plain revisit restores it instead of the main-only auto-fit.
+      // Final camera sync (frozen during the flight) + persist the settled
+      // viewport (full fit incl. context trays) so a later plain revisit
+      // restores it instead of the main-only auto-fit.
+      flushCameraZoom();
       try {
         const vp = instance.getViewport();
         if (viewRef.current != null) {
@@ -1060,37 +1474,62 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     return { hovered, boxes, edgesIn, edgesOut };
   }, [view, hover, ctxAdj, ctxNodeIds]);
 
+  // Hover/selection highlight is applied directly on the DOM (see the
+  // highlight effect below), never through this array: hovering touches
+  // only the affected elements and never re-renders nodes or edges.
+  // SPEED part 3: the drill-target fade is DOM-direct too (see the
+  // zoomKeep effect below). Mapping 500 nodes to append one class on every
+  // drill beat cost ~500 re-renders + a long frame; the visual is identical.
   const nodes = useMemo<AnyNode[]>(
     () =>
       baseNodes.map((n) => {
-        let cls = n.className ?? "";
-        // Camera zoom keeps the drill target full-strength while the rest
-        // fades (spec 4.7); hover dimming otherwise.
-        const faded =
-          zoomKeep != null && n.id !== zoomKeep ? " spec-node--drill-fade" : "";
+        const cls = n.className ?? "";
         // Pan tool: boxes are not draggable (left-drag pans instead).
         const noDrag = tool === "pan" && n.type === "specBox" ? { draggable: false } : null;
         if (n.id === "__frame__") {
-          return faded ? { ...n, className: cls + faded } : n;
+          return noDrag != null ? { ...n, ...(noDrag ?? {}) } : n;
         }
         if (n.type === "ctxChild") {
-          cls += " spec-node--ctx";
-          if (focus != null && focus.boxes.has(n.id)) cls += " spec-node--ctx-hot";
-          return cls !== (n.className ?? "") || faded !== ""
-            ? { ...n, className: cls + faded }
-            : n;
+          const want = " spec-node--ctx";
+          if (cls.includes("spec-node--ctx")) {
+            return noDrag != null ? { ...n, ...(noDrag ?? {}) } : n;
+          }
+          return { ...n, className: cls + want, ...(noDrag ?? {}) };
         }
         if (n.type === "ctxTray") {
-          return faded ? { ...n, className: cls + faded } : n;
+          return noDrag != null ? { ...n, ...(noDrag ?? {}) } : n;
         }
-        const dim =
-          focus != null && !focus.boxes.has(n.id) ? " spec-node--dim" : undefined;
-        const next = cls + (dim ?? "") + faded;
-        if (next !== (n.className ?? "") || noDrag != null) return { ...n, className: next, ...(noDrag ?? {}) };
+        if (noDrag != null) return { ...n, ...(noDrag ?? {}) };
         return n;
       }),
-    [baseNodes, focus, zoomKeep, tool],
+    [baseNodes, tool],
   );
+
+  // Drill fade (spec 4.7): the camera keeps the drill target full-strength
+  // while the rest fades. DOM-direct single pass (no React re-render); the
+  // root .flow-canvas--zooming class (cheap parent render) fades the edges
+  // via CSS, this pass fades the boxes. Synchronous with the zoomKeep state
+  // commit, so the animation still starts on the click frame.
+  useEffect(() => {
+    const root = canvasRef.current;
+    if (root == null) return;
+    try {
+      const els = root.querySelectorAll(".react-flow__node");
+      if (zoomKeep == null) {
+        els.forEach((el) => (el as HTMLElement).classList.remove("spec-node--drill-fade"));
+        return;
+      }
+      els.forEach((el) => {
+        const id = (el as HTMLElement).getAttribute("data-id");
+        (el as HTMLElement).classList.toggle("spec-node--drill-fade", id !== zoomKeep);
+      });
+    } catch {
+      /* fade must never break the canvas */
+    }
+  }, [zoomKeep, baseNodes]);
+
+  // Direct-DOM hover/selection highlight lives after the edge memo (it
+  // needs the sublink list); see HIGHLIGHT_EFFECT below.
 
   // ---- specEdge building (floating anchors, fan, via, status) ---------------
   //
@@ -1120,13 +1559,98 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     isFrame: boolean;
   }
 
-  const { edges, sublinkInfos, geoms: edgeGeoms } = useMemo<{
-    edges: FlowEdge[];
+  /** Selection-independent geometry for one sub-link (heavy part). */
+  interface GeomItem {
+    testId: string;
+    edgeIndex: number;
+    subIndex: number;
+    connId: string;
+    connIds: string[];
+    fromKey: string;
+    toKey: string;
+    lower: boolean;
+    isFrame: boolean;
+    d: string;
+    startArrow: string | null;
+    endArrow: string | null;
+    startArrowHi: string | null;
+    endArrowHi: string | null;
+    arrowD: string;
+    arrowDHi: string;
+    labelFull: SpecEdgeData["label"];
+    badgeFull: SpecEdgeData["badge"];
+    viaFull: SpecEdgeData["via"];
+    tooltip: string;
+    pathTestId: string;
+    statusMods: string;
+    coords: { x1: number; y1: number; x2: number; y2: number };
+    arrowheads: number;
+    parentPort: boolean;
+    viaRouted: boolean;
+    hx1: number;
+    hy1: number;
+    hx2: number;
+    hy2: number;
+    direction: string;
+    status: string;
+    lineShape: "curved" | "straight" | "square";
+    viaId: string | null;
+    labelPosition: number;
+    labelVisibleNear: boolean;
+  }
+
+  /** Triangle point-list ("x,y x,y x,y") as a filled path. */
+  function arrowPathOf(points: string): string {
+    const p = points.split(" ");
+    if (p.length !== 3) return "";
+    return `M${p[0]}L${p[1]}L${p[2]}Z`;
+  }
+
+  // Drill LRU: geometry results keyed by content (diagram+rev+tier+mode),
+  // so drilling back to a level swaps the cached arrays instead of
+  // re-routing hundreds of edges. Capped small; evicted FIFO.
+  const edgeGeomCacheRef = useRef(
+    new Map<string, { items: GeomItem[]; infos: SublinkInfo[]; geoms: Map<string, { at: (t: number) => Pt }> }>(),
+  );
+  // Per-edge geometry cache: during box drags only incident edges recompute
+  // (750 → a handful per frame); the rest reuse the previous item by ref,
+  // so presentation and React skip them too. Epoch-busted on any content,
+  // tier, mode or label-pass change.
+  const perEdgeCacheRef = useRef(new Map<string, {
+    item: GeomItem;
+    info: SublinkInfo;
+    geom: { at: (t: number) => Pt };
+    labelRect: { x: number; y: number; w: number; h: number } | null;
+  }>());
+  const perEdgeEpochRef = useRef("");
+
+  const { edgeGeom, sublinkInfos, geoms: edgeGeoms } = useMemo<{
+    edgeGeom: GeomItem[];
     sublinkInfos: SublinkInfo[];
     geoms: Map<string, { at: (t: number) => Pt }>;
   }>(() => {
     const v = view;
-    if (v == null) return { edges: [], sublinkInfos: [], geoms: new Map() };
+    if (v == null) return { edgeGeom: [], sublinkInfos: [], geoms: new Map() };
+    const batch = tier !== "near" && Object.keys(v.diagram.boxes).length > PERF_REGIME_NODES;
+    const labelsOn = labelsReady && !batch;
+    const dragN = Object.keys(dragPos).length;
+    // In batch mode pills never render, so the labels pass must not bust
+    // the drill cache (its flip would re-route all edges for nothing).
+    const gkey = `${v.diagram.id}:${model.rev}:${tier}:${batch ? "b1" : "b0"}:${batch || !labelsReady ? "x" : "l1"}:${dragN === 0 ? "d0" : "d1"}:${boxesHashOf(v.diagram.boxes)}`;
+    const cached = edgeGeomCacheRef.current.get(gkey);
+    if (cached != null) {
+      // Refresh recency.
+      edgeGeomCacheRef.current.delete(gkey);
+      edgeGeomCacheRef.current.set(gkey, cached);
+      return { edgeGeom: cached.items, sublinkInfos: cached.infos, geoms: cached.geoms };
+    }
+    let markedGeom = false;
+    try {
+      performance.mark("speculum:geom-start");
+      markedGeom = true;
+    } catch {
+      /* ignore */
+    }
     const doc = model.doc;
     const scopeId = v.scope?.id ?? v.diagram.scopeObjectId ?? null;
 
@@ -1202,7 +1726,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       ordered.forEach((s, k) => fanOf.set(s.testId, g.length > 1 ? offs[k] : 0));
     }
 
-    const list: FlowEdge[] = [];
+    const items: GeomItem[] = [];
     const infos: SublinkInfo[] = [];
     const geoms = new Map<string, { at: (t: number) => Pt }>();
     // Label collision avoidance: pills slide along their path clear of
@@ -1232,6 +1756,42 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
           ? liveFrame
           : (liveRects[s.toKey] ?? ctxChildRects[s.toKey] ?? null);
       if (fromRect == null || toRect == null) continue;
+
+      // Per-edge cache key from every live input (endpoint rects, via and
+      // frame rects, fan, manual/live label slots). A box drag changes only
+      // its incident edges' keys; everything else reuses the cached item.
+      const fanPre = fanOf.get(s.testId) ?? 0;
+      const layoutPre =
+        s.connId !== "" ? (v.diagram.connections[s.connId] as unknown as
+          | { labelPosition?: number | null; waypoints?: { x: number; y: number }[] }
+          | undefined) : undefined;
+      const manualTPre = layoutPre?.labelPosition ?? conn?.labelPosition ?? null;
+      const liveTPre = labelDrag?.testId === s.testId ? labelDrag.t : null;
+      const viaRectPre = conn?.viaId != null ? (liveRects[conn.viaId] ?? null) : null;
+      const rsigPre = (r: FlowRect | null) =>
+        r == null ? "-" : `${r.x},${r.y},${r.w},${r.h}`;
+      const frameSigPre =
+        (s.fromKey === "__frame__" || s.toKey === "__frame__") && liveFrame != null
+          ? rsigPre(liveFrame)
+          : "-";
+      // SPEED part 3: in batch mode pills never render, so the labels
+      // pass must not bust the per-edge cache (its flip re-routed all 750
+      // edges for an identical result: ~90ms build on every drill).
+      const epochPre = `${v.diagram.id}:${model.rev}:${tier}:${batch ? "b1" : "b0"}:${batch ? "x" : labelsReady ? "l1" : "l0"}`;
+      if (perEdgeEpochRef.current !== epochPre) {
+        perEdgeEpochRef.current = epochPre;
+        perEdgeCacheRef.current.clear();
+      }
+      const ekeyPre =
+        `${s.testId}|${rsigPre(fromRect)}|${rsigPre(toRect)}|${viaRectPre ? rsigPre(viaRectPre) : "-"}|${frameSigPre}|${fanPre}|${manualTPre ?? ""}|${liveTPre ?? ""}`;
+      const edgeHit = perEdgeCacheRef.current.get(ekeyPre);
+      if (edgeHit != null) {
+        items.push(edgeHit.item);
+        infos.push(edgeHit.info);
+        geoms.set(s.testId, edgeHit.geom);
+        if (edgeHit.labelRect != null) placedLabels.push(edgeHit.labelRect);
+        continue;
+      }
 
       // Context-tray links never use the parent port (spec 4.6): the tray
       // child is not a model child, so both ends anchor on borders.
@@ -1282,14 +1842,10 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       const direction = conn?.direction ?? "outgoing";
       const status = conn?.status ?? "live";
       const shape = (conn?.lineShape ?? "curved") as "curved" | "straight" | "square";
-      const fan = fanOf.get(s.testId) ?? 0;
-      const layout =
-        s.connId !== "" ? (v.diagram.connections[s.connId] as unknown as
-          | { labelPosition?: number | null; waypoints?: { x: number; y: number }[] }
-          | undefined) : undefined;
+      const fan = fanPre;
+      const layout = layoutPre;
       const waypoints = (layout?.waypoints ?? []).map((w) => ({ x: w.x, y: w.y }));
-      const manualT =
-        layout?.labelPosition ?? conn?.labelPosition ?? null;
+      const manualT = manualTPre;
 
       // Via object: pill at the midpoint when not boxed; two segments
       // through the box (arrowhead only at the final target) when boxed.
@@ -1300,7 +1856,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
               | { name: string; type: string }
               | undefined)
           : undefined;
-      const viaRect = viaId != null ? (liveRects[viaId] ?? null) : null;
+      const viaRect = viaRectPre;
       const viaRouted = viaId != null && viaRect != null;
 
       // Parent-port links leave straight from the tray edge into the tray
@@ -1339,37 +1895,30 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         };
       }
 
-      const isOut = focus != null && focus.edgesOut.has(s.edgeIndex);
-      const isIn = focus != null && focus.edgesIn.has(s.edgeIndex);
-      const touchesCtx =
-        isCtx &&
-        focus != null &&
-        focus.boxes.has(s.fromKey) &&
-        focus.boxes.has(s.toKey);
-      const touches = isOut || isIn || touchesCtx;
-      const dim = focus != null && !touches && hoveredEdge !== s.testId;
-      const hovered = hoveredEdge === s.testId;
-      const selected = selectedEdges.includes(s.testId);
-      const hi = touches || hovered || selected;
-      const strokeW = hi ? EDGE_TOKENS.strokeHi : EDGE_TOKENS.stroke;
-      const arrowSize = Math.max(EDGE_TOKENS.arrowMin / Math.max(zoom, 0.05), 4 * strokeW);
+      // Highlight (hover/selection/focus) is applied directly on the DOM
+      // by the highlight effect; geometry here depends only on rects, the
+      // edge set and the LOD tier — never on hover or selection, and wheel
+      // ticks within a tier reuse the cached arrays.
+      void isCtx;
+      void showAllLabels;
+      const strokeW = EDGE_TOKENS.stroke;
+      const strokeWHi = EDGE_TOKENS.strokeHi;
+      const arrowSize = Math.max(EDGE_TOKENS.arrowMin / Math.max(tierZoom, 0.05), 4 * strokeW);
+      const arrowSizeHi = Math.max(EDGE_TOKENS.arrowMin / Math.max(tierZoom, 0.05), 4 * strokeWHi);
       const arrowheads = direction === "bidirectional" ? 2 : direction === "none" ? 0 : 1;
 
       const labelText =
         conn?.name ??
         (s.connIds.length > 1 ? `${s.connIds.length} links` : "");
-      const labelVisible =
-        labelText !== "" &&
-        (zoom >= EDGE_TOKENS.labelZoomThreshold ||
-          showAllLabels ||
-          hovered ||
-          selected ||
-          touches);
+      // Labels/badges/via pills join on the second paint (labelsReady) and
+      // are skipped entirely in batch mode (mid/far perf regime renders one
+      // combined path with no pills). Near-tier look is untouched.
+      const wantPills = labelsOn && labelText !== "";
       // Live label-drag position wins while dragging; otherwise the manual
       // position wins, else the first collision-free slot along the path.
-      const liveT = labelDrag?.testId === s.testId ? labelDrag.t : null;
+      const liveT = liveTPre;
       const placed =
-        labelVisible && labelText !== ""
+        wantPills
           ? placeLabelAvoiding(
               geom.at,
               labelText,
@@ -1390,20 +1939,35 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       const tooltip =
         names.filter((n) => n !== "").join(", ") +
         (s.lower && s.connIds.length > 1 ? ` (${s.connIds.length} links)` : "");
-      const showBadge = s.lower && s.connIds.length > 1 && s.subIndex === 0;
+      const showBadge = labelsOn && s.lower && s.connIds.length > 1 && s.subIndex === 0;
       const badgePt = showBadge ? geom.at(0.85) : null;
 
-      let mods = "";
-      if (status !== "live") mods += ` spec-edge--status-${status}`;
-      if (s.lower) mods += " spec-edge--lower";
-      if (hi) mods += ` spec-edge--hi spec-edge--hi-${isOut || hovered || selected ? "out" : "in"}`;
-      if (selected) mods += " spec-edge--selected";
+      let statusMods = "";
+      if (status !== "live") statusMods += ` spec-edge--status-${status}`;
+      if (s.lower) statusMods += " spec-edge--lower";
 
-      const data: SpecEdgeData = {
+      const startPt = arrowheads === 2 ? arrowPoints(p1, { x: -geom.startTangent.x, y: -geom.startTangent.y }, arrowSize) : null;
+      const endPt = arrowheads >= 1 ? arrowPoints(p2, geom.endTangent, arrowSize) : null;
+      const startPtHi = arrowheads === 2 ? arrowPoints(p1, { x: -geom.startTangent.x, y: -geom.startTangent.y }, arrowSizeHi) : null;
+      const endPtHi = arrowheads >= 1 ? arrowPoints(p2, geom.endTangent, arrowSizeHi) : null;
+      items.push({
+        testId: s.testId,
+        edgeIndex: s.edgeIndex,
+        subIndex: s.subIndex,
+        connId: s.connId,
+        connIds: [...s.connIds],
+        fromKey: s.fromKey,
+        toKey: s.toKey,
+        lower: s.lower,
+        isFrame: s.isFrame,
         d: geom.d,
-        startArrow: arrowheads === 2 ? arrowPoints(p1, { x: -geom.startTangent.x, y: -geom.startTangent.y }, arrowSize) : null,
-        endArrow: arrowheads >= 1 ? arrowPoints(p2, geom.endTangent, arrowSize) : null,
-        label: labelVisible
+        startArrow: startPt,
+        endArrow: endPt,
+        startArrowHi: startPtHi,
+        endArrowHi: endPtHi,
+        arrowD: `${startPt != null ? arrowPathOf(startPt) : ""}${endPt != null ? arrowPathOf(endPt) : ""}`,
+        arrowDHi: `${startPtHi != null ? arrowPathOf(startPtHi) : ""}${endPtHi != null ? arrowPathOf(endPtHi) : ""}`,
+        labelFull: placed != null
           ? {
               x: labelPt.x,
               y: labelPt.y,
@@ -1412,7 +1976,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
               testId: "spec-edge-label",
             }
           : null,
-        badge: showBadge && badgePt
+        badgeFull: showBadge && badgePt
           ? {
               x: badgePt.x,
               y: badgePt.y,
@@ -1421,8 +1985,8 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
               testId: "spec-edge-badge",
             }
           : null,
-        via:
-          viaId != null && !viaRouted && viaObj != null
+        viaFull:
+          labelsOn && viaId != null && !viaRouted && viaObj != null
             ? {
                 x: midPt.x,
                 y: midPt.y,
@@ -1432,43 +1996,26 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
               }
             : null,
         tooltip,
-        testId: `spec-${s.testId}`,
         pathTestId: isCtx
           ? `spec-ctx-edge-path-${s.subIndex}`
           : `spec-edge-path-${s.edgeIndex}${s.subIndex > 0 ? `-${s.subIndex}` : ""}`,
-        mods,
+        statusMods,
         coords: { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y },
-        fromKey: s.fromKey,
-        toKey: s.toKey,
-        connIds: [...s.connIds],
         arrowheads,
         parentPort: fromIsParent || toIsParent,
         viaRouted,
-        selected,
         hx1: p1.x + n1.x * 14,
         hy1: p1.y + n1.y * 14,
         hx2: p2.x + n2.x * 14,
         hy2: p2.y + n2.y * 14,
-      };
-
-      list.push({
-        id: s.testId,
-        source: s.fromKey,
-        target: s.toKey,
-        type: "specEdge",
-        data,
-        selectable: true,
-        selected: selectedEdges.includes(s.testId),
-        className:
-          "flow-edge" +
-          (touches || hovered || selected
-            ? ` flow-edge--hi flow-edge--${isOut || (!isIn && (hovered || selected)) ? "out" : "in"}`
-            : "") +
-          (dim ? " flow-edge--dim" : "") +
-          (s.lower ? " flow-edge--lower" : "") +
-          (s.isFrame ? " flow-edge--frame" : ""),
+        direction,
+        status,
+        lineShape: shape,
+        viaId,
+        labelPosition: labelPos,
+        labelVisibleNear: labelText !== "",
       });
-      infos.push({
+      const info: SublinkInfo = {
         testId: `spec-${s.testId}`,
         edgeIndex: s.edgeIndex,
         subIndex: s.subIndex,
@@ -1486,14 +2033,283 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         fromKey: s.fromKey,
         toKey: s.toKey,
         parentPort: fromIsParent || toIsParent,
-        labelVisible,
+        // Visibility is decided per render (tier/labels/selection); the
+        // geometry pass only reports whether the link carries a label.
+        labelVisible: labelText !== "",
+      };
+      infos.push(info);
+      perEdgeCacheRef.current.set(ekeyPre, {
+        item: items[items.length - 1],
+        info,
+        geom,
+        labelRect:
+          placed != null
+            ? { x: placed.x - placed.w / 2, y: placed.y - placed.h / 2, w: placed.w, h: placed.h }
+            : null,
       });
     }
-    // Highlighted edges render last (on top).
+    const result = { items, infos, geoms };
+    try {
+      if (markedGeom) {
+        performance.mark("speculum:geom-end");
+        performance.measure("speculum:geom", "speculum:geom-start", "speculum:geom-end");
+      }
+    } catch {
+      /* ignore */
+    }
+    edgeGeomCacheRef.current.set(gkey, result);
+    if (edgeGeomCacheRef.current.size > 4) {
+      const first = edgeGeomCacheRef.current.keys().next().value;
+      if (first != null) edgeGeomCacheRef.current.delete(first);
+    }
+    return { edgeGeom: items, sublinkInfos: infos, geoms };
+    // NOTE: selection/hover are presentation-only (next memo); geometry
+    // keys on the tier so pan/zoom within a tier is zero React work.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, model.doc, model.rev, liveRects, liveFrame, ctxLinks, ctxChildRects, tier, labelDrag, labelsReady, dragPos, batchEdges]);
+
+  // Presentation: selection + label-threshold applied onto cached
+  // geometry (cheap map, no re-routing). In batch mode React Flow gets no
+  // per-edge components. Label visibility keys on the zoom bucket (not the
+  // tier) so the 60% label rule stays exact; crossing buckets only rebuilds
+  // objects whose visibility actually flips (stable cache refs otherwise),
+  // so wheel ticks within a tier still cause zero box/edge re-renders.
+  const edges = useMemo<FlowEdge[]>(() => {
+    if (batchEdges) return [];
+    const list: FlowEdge[] = [];
+    for (const it of edgeGeom) {
+      const selected = selectedEdges.includes(it.testId);
+      const labelVisible =
+        it.labelFull != null &&
+        (tier !== "near"
+          ? showAllLabels || selected
+          : zoomB >= EDGE_TOKENS.labelZoomThreshold || showAllLabels || selected);
+      let mods = it.statusMods;
+      if (selected) mods += " spec-edge--hi spec-edge--hi-out spec-edge--selected";
+      // Signature first: unchanged edges reuse the cached object without
+      // allocating the presentation copies below (750 small allocs saved
+      // on every select/hover-bucket pass).
+      const startArrow = selected ? it.startArrowHi : it.startArrow;
+      const endArrow = selected ? it.endArrowHi : it.endArrow;
+      const edgeSig = [
+        it.fromKey, it.toKey, it.d, startArrow ?? "", endArrow ?? "",
+        labelVisible && it.labelFull ? `${it.labelFull.x},${it.labelFull.y}:${it.labelFull.text}:${it.labelFull.meta ?? ""}` : "-",
+        it.badgeFull ? `${it.badgeFull.x},${it.badgeFull.y}:${it.badgeFull.text}` : "-",
+        it.viaFull ? `${it.viaFull.x},${it.viaFull.y}:${it.viaFull.name}` : "-",
+        it.tooltip, mods,
+        `${it.coords.x1},${it.coords.y1},${it.coords.x2},${it.coords.y2}`,
+        it.connIds.join(","), String(it.arrowheads),
+        String(it.parentPort), String(it.viaRouted), String(selected),
+        `${it.hx1},${it.hy1},${it.hx2},${it.hy2}`,
+        it.lower ? "L" : "", it.isFrame ? "F" : "",
+      ].join("|");
+      const prevEdge = edgeCacheRef.current.get(it.testId);
+      if (prevEdge != null && prevEdge.sig === edgeSig) {
+        list.push(prevEdge.edge);
+      } else {
+        const data: SpecEdgeData = {
+          d: it.d,
+          startArrow,
+          endArrow,
+          label: labelVisible ? it.labelFull : null,
+          badge: it.badgeFull,
+          via: it.viaFull,
+          tooltip: it.tooltip,
+          testId: `spec-${it.testId}`,
+          pathTestId: it.pathTestId,
+          mods,
+          coords: { ...it.coords },
+          fromKey: it.fromKey,
+          toKey: it.toKey,
+          connIds: [...it.connIds],
+          arrowheads: it.arrowheads,
+          parentPort: it.parentPort,
+          viaRouted: it.viaRouted,
+          selected,
+          hx1: it.hx1,
+          hy1: it.hy1,
+          hx2: it.hx2,
+          hy2: it.hy2,
+        };
+        const built: FlowEdge = {
+          id: it.testId,
+          source: it.fromKey,
+          target: it.toKey,
+          type: "specEdge",
+          data,
+          selectable: true,
+          selected,
+          className:
+            "flow-edge" +
+            (selected ? " flow-edge--hi flow-edge--out" : "") +
+            (it.lower ? " flow-edge--lower" : "") +
+            (it.isFrame ? " flow-edge--frame" : ""),
+        };
+        edgeCacheRef.current.set(it.testId, { sig: edgeSig, edge: built });
+        list.push(built);
+      }
+    }
     const order = (e: FlowEdge) => (e.className?.includes("flow-edge--hi") ? 1 : 0);
     list.sort((a, b) => order(a) - order(b));
-    return { edges: list, sublinkInfos: infos, geoms };
-  }, [view, focus, model.doc, liveRects, liveFrame, ctxLinks, ctxChildRects, zoom, showAllLabels, hoveredEdge, selectedEdges, labelDrag]);
+    const live = new Set(list.map((e) => e.id));
+    for (const key of [...edgeCacheRef.current.keys()]) {
+      if (!live.has(key)) edgeCacheRef.current.delete(key);
+    }
+    return list;
+  }, [edgeGeom, selectedEdges, showAllLabels, tier, zoomB, batchEdges]);
+  const edgesMirror = useRef<FlowEdge[]>([]);
+  edgesMirror.current = edges;
+
+  // Highlighted sub-links (hover focus, edge hover, selection): drawn as
+  // one overlay path above the combined layer in batch mode, and as the
+  // edge part of the hover overlay layer in the perf-regime veil mode.
+  const batchHi = useMemo(() => {
+    const hot = focus?.boxes ?? null;
+    const out = new Set<number>(focus?.edgesOut ?? []);
+    const inn = new Set<number>(focus?.edgesIn ?? []);
+    const hits: GeomItem[] = [];
+    for (const it of edgeGeom) {
+      if (selectedEdges.includes(it.testId) || hoveredEdge === it.testId) {
+        hits.push(it);
+        continue;
+      }
+      if (hot != null && (out.has(it.edgeIndex) || inn.has(it.edgeIndex))) {
+        if (it.edgeIndex >= 0) {
+          hits.push(it);
+          continue;
+        }
+      }
+      if (
+        hot != null &&
+        it.edgeIndex === -1 &&
+        hot.has(it.fromKey) &&
+        hot.has(it.toKey)
+      ) {
+        hits.push(it);
+      }
+    }
+    return hits;
+  }, [edgeGeom, focus, hoveredEdge, selectedEdges]);
+
+  // Combined layer, split so hover/selection never rebuild the static
+  // paths: base groups memo on geometry only; the highlight overlay (a few
+  // edges) rebuilds alone. Without the split every hover re-concatenated
+  // ~1MB of path strings and re-rendered the whole layer (~50ms).
+  const batchGroups = useMemo<BatchGroup[]>(() => {
+    if (!batchEdges) return [];
+    const groups = new Map<string, BatchGroup>();
+    for (const it of edgeGeom) {
+      const cls = `edge-batch__group${it.statusMods}${it.lower ? " edge-batch__group--lower" : ""}`;
+      let g = groups.get(cls);
+      if (g == null) {
+        g = { cls, d: "", arrowD: "" };
+        groups.set(cls, g);
+      }
+      g.d += `${it.d} `;
+      g.arrowD += it.arrowD;
+    }
+    return [...groups.values()];
+  }, [batchEdges, edgeGeom]);
+
+  const batchHiGroups = useMemo<BatchGroup[]>(() => {
+    if (!batchEdges) return [];
+    const g: BatchGroup = { cls: "edge-batch__group--hi", d: "", arrowD: "" };
+    for (const it of batchHi) {
+      g.d += `${it.d} `;
+      g.arrowD += it.arrowDHi;
+    }
+    return g.d === "" && g.arrowD === "" ? [] : [g];
+  }, [batchEdges, batchHi]);
+
+  // The combined layer node: positioned over the content box so viewport
+  // culling keeps it mounted exactly while any box is visible.
+  const batchNode = useMemo<BatchNodeType | null>(() => {
+    if (!batchEdges || view == null) return null;
+    const rects = Object.values(liveRects);
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const r of rects) {
+      if (r.x < x0) x0 = r.x;
+      if (r.y < y0) y0 = r.y;
+      if (r.x + r.w > x1) x1 = r.x + r.w;
+      if (r.y + r.h > y1) y1 = r.y + r.h;
+    }
+    if (!Number.isFinite(x0)) {
+      x0 = 0;
+      y0 = 0;
+      x1 = 1;
+      y1 = 1;
+    }
+    return {
+      id: "__batchedges__",
+      type: "batchEdges",
+      position: { x: x0, y: y0 },
+      style: { width: Math.max(x1 - x0, 1), height: Math.max(y1 - y0, 1) },
+      className: "edge-batch-node",
+      data: {
+        groups: batchGroups,
+        hi: batchHiGroups,
+        ox: x0,
+        oy: y0,
+      },
+      selectable: false,
+      draggable: false,
+    };
+  }, [batchEdges, view, batchGroups, batchHiGroups, liveRects]);
+
+  // VEIL HOVER (perf regime, >150 boxes): a single translucent layer dims
+  // everything at once instead of toggling opacity on hundreds of elements
+  // (in headless software rendering each toggle repaints the whole canvas);
+  // the highlighted subset (hot boxes + hot links) renders into an overlay
+  // layer above it. Same visual dim level (canvas bg at 75% reads as content
+  // at 0.25 over the canvas). Small diagrams keep the per-element dim
+  // classes the checks assert. The overlay follows the camera through a ref
+  // (transform set imperatively), so pan/zoom during hover cost no renders.
+  const veilOn = nodeCount > PERF_REGIME_NODES && (focus?.boxes ?? null) != null;
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const overlayBoxes = useMemo(() => {
+    if (!veilOn) return [];
+    const hot = focus?.boxes;
+    if (hot == null) return [];
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const out: { id: string; x: number; y: number; w: number; h: number; data: SpecBoxData }[] = [];
+    for (const id of hot) {
+      const n = byId.get(id);
+      if (n == null || n.type !== "specBox") continue;
+      const d = n.data as unknown as SpecBoxData;
+      const w = typeof n.style?.width === "number" ? n.style.width : 120;
+      const h = typeof n.style?.height === "number" ? n.style.height : 120;
+      out.push({ id, x: n.position.x, y: n.position.y, w, h, data: { ...d, bare: true } });
+    }
+    return out;
+  }, [veilOn, focus, baseNodes]);
+  const syncOverlayTransform = useCallback(() => {
+    const el = overlayRef.current;
+    if (el == null) return;
+    try {
+      const vp = instance.getViewport();
+      el.style.transform = `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})`;
+    } catch {
+      /* canvas not ready */
+    }
+  }, [instance]);
+  useEffect(() => {
+    if (veilOn) syncOverlayTransform();
+  }, [veilOn, overlayBoxes, batchHi, syncOverlayTransform]);
+
+  // Batch layer sorts right behind the boxes (after the scope frame).
+  // Typed as AnyNode for the React Flow props (the runtime only needs
+  // id/position/style/data; the batch node is never draggable/selectable).
+  const rfNodes = useMemo<AnyNode[]>(() => {
+    if (batchNode == null) return nodes;
+    const at = nodes.length > 0 && nodes[0].id === "__frame__" ? 1 : 0;
+    const out = nodes.slice();
+    out.splice(at, 0, batchNode as unknown as AnyNode);
+    return out;
+  }, [nodes, batchNode]);
+  const rfEdges = edges;
 
   const geomRef = useRef<Map<string, { at: (t: number) => Pt }>>(new Map());
   geomRef.current = edgeGeoms;
@@ -1503,6 +2319,79 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   useEffect(() => {
     setDebugSublinks(sublinkInfos);
   }, [sublinkInfos]);
+
+  // HIGHLIGHT_EFFECT: direct-DOM hover/selection highlight. Toggles the
+  // exact classes the checks assert (spec-node--dim, flow-edge--hi/in/out,
+  // flow-edge--dim, spec-edge--hi/in/out, spec-node--ctx-hot): no node/edge
+  // array rebuild, no layout, no edge re-routing, so hover/selection land
+  // in the next painted frame. Single native pass over the node/edge
+  // collections (no per-id querySelector: that cost ~150ms at 500 boxes);
+  // in batch mode there is no per-edge DOM — the overlay path in the
+  // batch node carries the highlight instead.
+  useEffect(() => {
+    const root = canvasRef.current;
+    if (root == null) return;
+    try {
+      if (hover != null) root.setAttribute("data-hover-id", hover);
+      else root.removeAttribute("data-hover-id");
+      const hotBoxes = focus?.boxes ?? null;
+      // Perf regime: the veil + overlay carry the highlight; touching
+      // hundreds of elements is skipped (and none were dimmed on the way
+      // in, so there is nothing to clean on the way out either).
+      if (nodeCount > PERF_REGIME_NODES && hotBoxes != null) return;
+      const nodeEls = root.querySelectorAll(".react-flow__node");
+      nodeEls.forEach((el) => {
+        if ((el as HTMLElement).classList.contains("kept-node")) return;
+        const id = (el as HTMLElement).getAttribute("data-id");
+        if (id == null || id === "__frame__" || id === "__batchedges__") return;
+        const hot = hotBoxes == null ? true : hotBoxes.has(id);
+        (el as HTMLElement).classList.toggle("spec-node--dim", !hot);
+        if (id.startsWith("ctxc-") || id.startsWith("ctxt-")) {
+          (el as HTMLElement).classList.toggle("spec-node--ctx-hot", hot && hotBoxes != null);
+        }
+      });
+      if (batchEdges) return;
+      const edgeOut = focus?.edgesOut ?? null;
+      const edgeIn = focus?.edgesIn ?? null;
+      const infos = sublinkRef.current;
+      const wantEdgeHi = new Map<string, "out" | "in">();
+      for (const s of infos) {
+        const id = s.testId.replace(/^spec-/, "");
+        const isOut = edgeOut?.has(s.edgeIndex) ?? false;
+        const isIn = edgeIn?.has(s.edgeIndex) ?? false;
+        const touchesCtx =
+          s.edgeIndex === -1 &&
+          hotBoxes != null &&
+          hotBoxes.has(s.fromKey) &&
+          hotBoxes.has(s.toKey);
+        const hov = hoveredEdge === id;
+        const sel = selectedEdges.includes(id);
+        const hi = isOut || isIn || touchesCtx || hov || sel;
+        if (hi) wantEdgeHi.set(id, isOut || hov || sel || !isIn ? "out" : "in");
+      }
+      const dimAll = hotBoxes != null;
+      const edgeEls = root.querySelectorAll(".react-flow__edge");
+      edgeEls.forEach((el) => {
+        const id = (el as HTMLElement).getAttribute("data-id");
+        if (id == null) return;
+        const dir = wantEdgeHi.get(id) ?? null;
+        const w = el as HTMLElement;
+        w.classList.toggle("flow-edge--hi", dir != null);
+        w.classList.toggle("flow-edge--out", dir === "out");
+        w.classList.toggle("flow-edge--in", dir === "in");
+        w.classList.toggle("flow-edge--dim", dir == null && dimAll);
+        const g = w.querySelector("g.spec-edge");
+        if (g != null) {
+          g.classList.toggle("spec-edge--hi", dir != null);
+          g.classList.toggle("spec-edge--hi-out", dir === "out");
+          g.classList.toggle("spec-edge--hi-in", dir === "in");
+        }
+      });
+    } catch {
+      /* highlight must never break the canvas */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, hover, hoveredEdge, selectedEdges, rfNodes, rfEdges, batchEdges]);
 
   // ---- viewport restore / persist ------------------------------------------
   // The saved viewport is applied in a layout effect (before paint) so the
@@ -1519,7 +2408,10 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     if (!applyDrillSwap()) {
       // No camera sequence (or it could not run): settle visual state so
       // the phase never sticks and input stays live. The reduced-motion
-      // fade belongs to the store timer (120ms), not the canvas.
+      // fade belongs to the store timer (120ms), not the canvas. Pending
+      // timers of an older drill die here so their settle/done writes
+      // (phases, viewport persists) can never land on the new level.
+      clearDrillTimers();
       setZoomKeep(null);
       if (drillRef.current == null || !drillRef.current.reduced) setDrillPhase("idle");
     } else {
@@ -1532,15 +2424,22 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       setZoom(vp.zoom);
       onZoom(vp.zoom);
     } else {
-      // Fresh level: fit + centre the MAIN tray with padding, capped at
-      // 1.25. Context trays stay out of the auto-fit (they join manual
-      // Fit); this keeps first-open zoom stable.
-      const mainIds = [
-        ...Object.keys(view.diagram.boxes).map((id) => ({ id })),
-        ...(view.scope != null ? [{ id: "__frame__" }] : []),
-      ];
-      if (mainIds.length > 0) {
-        void instance.fitView({ nodes: mainIds, padding: 0.2, maxZoom: 1.25 });
+      // Fresh level: fit + centre the MAIN tray synchronously (before
+      // paint, from the persisted rects). The mount already seeded this
+      // framing, so this is usually a same-tier nudge (free).
+      const c = canvasRef.current?.getBoundingClientRect();
+      const rects: Rect[] = Object.values(view.diagram.boxes);
+      if (c != null && c.width > 0 && c.height > 0 && rects.length > 0) {
+        const fit = fitViewportFor(rects, c.width, c.height);
+        if (fit == null) {
+          void instance.fitView({ padding: 0.2, maxZoom: 1.25 });
+          return;
+        }
+        const z = fit.zoom;
+        void instance.setViewport(fit);
+        setLiveViewport(view.diagram.id, { ...fit });
+        setZoom(z);
+        onZoom(z);
       } else {
         void instance.fitView({ padding: 0.2, maxZoom: 1.25 });
       }
@@ -1616,6 +2515,23 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     const z = Math.min(Math.max(Math.min((c.width - pad * 2) / bw, (c.height - pad * 2) / bh), 0.1), 4);
     const cx = x0 + bw / 2;
     const cy = y0 + bh / 2;
+    // SPEED part 3: no-op when already fitted (repeated Shift+1 / the
+    // perf-check refit after a symmetric wheel sweep ran a full 200ms
+    // camera flight + viewport save for an identical viewport).
+    try {
+      const cur = instance.getViewport();
+      const tx = c.width / 2 - cx * z;
+      const ty = c.height / 2 - cy * z;
+      if (
+        Math.abs(cur.zoom - z) < 0.005 &&
+        Math.abs(cur.x - tx) < 2 &&
+        Math.abs(cur.y - ty) < 2
+      ) {
+        return;
+      }
+    } catch {
+      /* fall through to the flight */
+    }
     try {
       runProgrammatic(reduced ? 60 : 300);
       if (reduced) {
@@ -1627,6 +2543,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       onZoomRef.current(z);
       window.setTimeout(
         () => {
+          flushCameraZoom();
           try {
             const vp = instance.getViewport();
             const id = viewRef.current?.diagram.id;
@@ -1654,6 +2571,14 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   const onNodeDragStop = useCallback(
     (e: MouseEvent | TouchEvent, _node: unknown, all: AnyNode[]) => {
       draggingRef.current = false;
+      // Drop any coalesced-but-unflushed drag positions first: a pending
+      // rAF flush firing after the drop would resurrect a stale offset and
+      // corrupt the live rects (frame/undo checks caught this).
+      if (dragRaf.current != null) {
+        cancelAnimationFrame(dragRaf.current);
+        dragRaf.current = null;
+      }
+      pendingDragPos.current = {};
       // Live positions are flushed into the persisted move below.
       setDragPos({});
       const v = viewRef.current;
@@ -2177,11 +3102,28 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       nodes: { id: string }[];
       edges: { id: string }[];
     }) => {
+      try {
+        performance.mark("speculum:select-start");
+      } catch {
+        /* measuring never breaks selection */
+      }
       const v = viewRef.current;
       const boxes = v?.diagram.boxes ?? {};
       select(
         sel.map((n) => n.id).filter((id) => id !== "__frame__" && boxes[id] != null),
       );
+      try {
+        requestAnimationFrame(() => {
+          try {
+            performance.mark("speculum:select-painted");
+            performance.measure("speculum:select", "speculum:select-start", "speculum:select-painted");
+          } catch {
+            /* ignore */
+          }
+        });
+      } catch {
+        /* ignore */
+      }
       const edgeIds = selEdges.map((e) => e.id);
       setSelectedEdges(edgeIds);
       // Resolve the first selected sub-link to its model link for the panel.
@@ -2207,7 +3149,19 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     [findSublink],
   );
 
-  const clearSelection = useCallback(() => select([]), []);
+  // Escape-clear is programmatic (React Flow would keep its own flags):
+  // clear the store selection and mirror it into the node array directly
+  // (rare path; the click path flows through React Flow itself).
+  const clearSelection = useCallback(() => {
+    select([]);
+    setBaseNodes((prev) => {
+      let changed = false;
+      const next = prev.map((n) =>
+        n.selected === true ? ((changed = true), { ...n, selected: false }) : n,
+      );
+      return changed ? next : prev;
+    });
+  }, []);
 
   // ---- connect mode clicks (C, then source, then target) --------------------
   const firstOtherBox = useCallback((src: string): string | null => {
@@ -2367,15 +3321,17 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         return;
       }
       // Alt+Left / Alt+Right = back / forward through the nav stack.
-      // (Ignored mid-animation, like all other drill input.)
+      // (Ignored mid-animation, like all other drill input. The guard keys
+      // on the store animation only: lingering camera-settle phases must
+      // never swallow the next gesture — user input cancels the visuals.)
       if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === "ArrowLeft") {
-        if (model.animating || model.drillAnim !== "idle") return;
+        if (model.animating) return;
         e.preventDefault();
         void goBack();
         return;
       }
       if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === "ArrowRight") {
-        if (model.animating || model.drillAnim !== "idle") return;
+        if (model.animating) return;
         e.preventDefault();
         void goForward();
         return;
@@ -2383,7 +3339,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       if (e.key === " " && !inField) e.preventDefault();
       if (inField) return;
       // Input is ignored while a drill animation runs (Esc still finishes).
-      if (model.animating || model.drillAnim !== "idle") return;
+      if (model.animating) return;
       const cm = connectRef.current;
       if (e.key === "Escape") {
         if (repointAsk != null) {
@@ -2460,8 +3416,9 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === "c" || e.key === "C")) {
         e.preventDefault();
         setTool("connect");
-        if (selection.length === 1) {
-          setConnectMode({ source: selection[0], candidate: firstOtherBox(selection[0]) });
+        const selNow = selRef.current;
+        if (selNow.length === 1) {
+          setConnectMode({ source: selNow[0], candidate: firstOtherBox(selNow[0]) });
         } else {
           setConnectMode({ source: null, candidate: null });
         }
@@ -2485,14 +3442,14 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         return;
       }
       // F2 on the selected box starts inline rename.
-      if (e.key === "F2" && selection.length === 1 && !inField) {
+      if (e.key === "F2" && selRef.current.length === 1 && !inField) {
         e.preventDefault();
-        setRenaming(selection[0]);
+        setRenaming(selRef.current[0]);
         return;
       }
       // Enter on the selected box drills in.
-      if (e.key === "Enter" && selection.length === 1 && renamingId == null) {
-        const id = selection[0];
+      if (e.key === "Enter" && selRef.current.length === 1 && renamingId == null) {
+        const id = selRef.current[0];
         e.preventDefault();
         const el = document.querySelector(
           `[data-testid="box-${CSS.escape(id)}"]`,
@@ -2567,9 +3524,9 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
         return;
       }
       // Delete removes FROM THE DIAGRAM ONLY (model keeps it).
-      if (e.key === "Delete" && selection.length > 0) {
+      if (e.key === "Delete" && selRef.current.length > 0) {
         e.preventDefault();
-        void removeFromDiagram(selection);
+        void removeFromDiagram(selRef.current);
         return;
       }
       // Add-object placement hotkeys (match M4 tooltips exactly):
@@ -2604,7 +3561,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     };
     // Mouse buttons 3/4 (X1/X2): back / forward (ignored mid-animation).
     const onMouse = (e: MouseEvent) => {
-      if (model.animating || model.drillAnim !== "idle") return;
+      if (model.animating) return;
       if (e.button === 3) {
         e.preventDefault();
         void goBack();
@@ -2619,7 +3576,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mousedown", onMouse);
     };
-  }, [instance, selection, renamingId, clearSelection, model.animating, model.drill, model.drillAnim, selectedEdges, repointAsk, labelDrag, findSublink, firstOtherBox, fitToScreen]);
+  }, [instance, renamingId, clearSelection, model.animating, model.drill, model.drillAnim, selectedEdges, repointAsk, labelDrag, findSublink, firstOtherBox, fitToScreen]);
 
   // Space-held temporary pan: holding Space pans, release returns.
   useEffect(() => {
@@ -2733,7 +3690,6 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     );
   }
 
-  const nodeCount = Object.keys(view.diagram.boxes).length;
   const incomingClass =
     drill != null
       ? drill.reduced
@@ -2746,7 +3702,7 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
   return (
     <div
       className={
-        "flow-canvas" + (animating && drill ? " flow-canvas--anim" : "") + (zoomKeep != null ? " flow-canvas--zooming" : "") + (model.connectMode != null || tool === "connect" ? " flow-canvas--connect" : "") + toolCursor
+        "flow-canvas" + (animating && drill ? " flow-canvas--anim" : "") + (zoomKeep != null ? " flow-canvas--zooming" : "") + (model.connectMode != null || tool === "connect" ? " flow-canvas--connect" : "") + (tier !== "near" && nodeCount > PERF_REGIME_NODES ? " flow-canvas--lod" : "") + toolCursor
       }
       data-testid="canvas"
       ref={canvasRef}
@@ -2757,21 +3713,29 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
     >
       <div className={`flow-canvas__view${incomingClass}`}>
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
+          nodes={rfNodes}
+          edges={rfEdges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
+          defaultViewport={defaultViewport}
           colorMode={resolved}
           attributionPosition="bottom-right"
-          onInit={() => setReady(true)}
+          onInit={() => {
+            try {
+              performance.mark("speculum:rf-init");
+            } catch {
+              /* ignore */
+            }
+            setReady(true);
+          }}
           onNodesChange={handleNodesChange}
           onSelectionChange={onSelectionChange}
           onNodeDragStart={onNodeDragStart}
           onNodeDragStop={onNodeDragStop}
-          onNodeMouseEnter={(_, node) =>
-            node.id !== "__frame__" && setHover(node.id)
-          }
-          onNodeMouseLeave={() => setHover(null)}
+          onNodeMouseEnter={(_, node) => {
+            if (node.id !== "__frame__") queueHover(node.id);
+          }}
+          onNodeMouseLeave={() => queueHover(null)}
           onNodeClick={onNodeClick}
           onEdgeMouseEnter={(_, edge) => setHoveredEdge(edge.id)}
           onEdgeMouseLeave={() => setHoveredEdge(null)}
@@ -2779,11 +3743,31 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
           onNodeDoubleClick={onNodeDoubleClick}
           onPaneClick={onPaneClick}
           onMove={(_, viewport) => {
-            setZoom(viewport.zoom);
-            onZoom(viewport.zoom);
+            // Hover overlay follows the camera with zero React work.
+            if (overlayRef.current != null) {
+              overlayRef.current.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`;
+            }
+            // Programmatic camera moves never touch React state: geometry
+            // (edges) and LOD tier stay frozen for the whole camera flight
+            // and sync once when it settles, so a drill causes one geometry
+            // build instead of one per animation frame.
+            if (programmaticRef.current) {
+              pendingZoomRef.current = viewport.zoom;
+              return;
+            }
+            // Zero React work per pan/zoom frame: state (and the tree above
+            // the canvas) updates only when the bucket or LOD tier changes;
+            // the exact zoom syncs on move end. Pan frames (zoom identical)
+            // and wheel ticks within a bucket never re-render.
+            const b = zoomBucketOf(viewport.zoom);
+            const t = tierOf(viewport.zoom);
+            if (b !== lastZoomBucketRef.current || t !== tierRef.current) {
+              lastZoomBucketRef.current = b;
+              setZoom(viewport.zoom);
+              onZoom(viewport.zoom);
+            }
             // Programmatic camera moves are not input: they neither cancel
             // the visual sequence nor persist the viewport.
-            if (programmaticRef.current) return;
             if (zoomKeep != null || (model.drillAnim !== "idle" && model.drillAnim !== "fade")) {
               cancelDrillVisual();
             }
@@ -2793,6 +3777,10 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
           }}
           onMoveEnd={(_, viewport) => {
             if (programmaticRef.current) return;
+            // Exact zoom sync after the gesture (display + parent).
+            lastZoomBucketRef.current = zoomBucketOf(viewport.zoom);
+            setZoom(viewport.zoom);
+            onZoomRef.current(viewport.zoom);
             queueViewportSave(viewport);
           }}
           minZoom={0.1}
@@ -2813,7 +3801,19 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
           multiSelectionKeyCode="Shift"
           deleteKeyCode={null}
           nodesConnectable={false}
-          onlyRenderVisibleElements={nodeCount > 300}
+          // SPEED part 3: culling stays on for pan/zoom but off through the
+          // drill camera flight. The zoom/preset/settle sweep otherwise
+          // mounts/unmounts hundreds of culled boxes per animation frame
+          // (~450 extra box renders + the longest frame on every drill).
+          onlyRenderVisibleElements={
+            nodeCount > 150 &&
+            !animating &&
+            drill == null &&
+            model.drillAnim !== "in-swap" &&
+            model.drillAnim !== "up-swap" &&
+            model.drillAnim !== "in-settle" &&
+            model.drillAnim !== "up-settle"
+          }
         >
           <Background
             variant={BackgroundVariant.Dots}
@@ -2823,6 +3823,58 @@ function FlowCanvasInner({ onZoom }: FlowCanvasProps) {
           />
         </ReactFlow>
       </div>
+      {veilOn && (
+        <div className="hover-veil" data-testid="hover-veil" aria-hidden="true" />
+      )}
+      {veilOn && (
+        <div
+          ref={overlayRef}
+          className="hover-overlay"
+          data-testid="hover-overlay"
+          aria-hidden="true"
+        >
+          {batchHi.length > 0 && (
+            <svg
+              className="hover-overlay__edges"
+              width={1}
+              height={1}
+              aria-hidden="true"
+            >
+              {batchHi.map((it) => (
+                <g key={it.testId}>
+                  <path
+                    className="edge-batch__path edge-batch__path--hi"
+                    d={it.d}
+                  />
+                  {it.arrowDHi !== "" && (
+                    <path
+                      className="edge-batch__arrow edge-batch__arrow--hi"
+                      d={it.arrowDHi}
+                    />
+                  )}
+                </g>
+              ))}
+            </svg>
+          )}
+          {overlayBoxes.map((b) => (
+            <div
+              key={b.id}
+              className="hover-overlay__box"
+              style={{ left: b.x, top: b.y, width: b.w, height: b.h }}
+            >
+              <SpecBox
+                {...{
+                  id: b.id,
+                  type: "specBox",
+                  data: b.data,
+                  selected: false,
+                  dragging: false,
+                } as unknown as NodeProps}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       {/* Left tool palette + breadcrumb (offset right of the bar) + zoom. */}
       <ToolPalette />
       <BreadcrumbCard />

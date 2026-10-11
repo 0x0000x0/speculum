@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { EdgeProps } from "@xyflow/react";
+import { perfNoteRender } from "../model/store";
 import "./SpecEdge.css";
 
 export interface SpecEdgeBadge {
@@ -87,6 +88,7 @@ function ViaGlyph({ kind }: { kind: string }) {
 }
 
 function SpecEdgeInner({ data }: EdgeProps) {
+  perfNoteRender("edge");
   const d = data as unknown as SpecEdgeData;
   const c = d.coords;
   return (
@@ -219,5 +221,38 @@ function SpecEdgeInner({ data }: EdgeProps) {
   );
 }
 
-const SpecEdge = memo(SpecEdgeInner);
+function specEdgeEqual(prev: Readonly<EdgeProps>, next: Readonly<EdgeProps>): boolean {
+  const a = prev.data as unknown as SpecEdgeData;
+  const b = next.data as unknown as SpecEdgeData;
+  if (prev.selected !== next.selected) return false;
+  if (a.d !== b.d) return false;
+  if (a.startArrow !== b.startArrow) return false;
+  if (a.endArrow !== b.endArrow) return false;
+  if (a.mods !== b.mods) return false;
+  if (a.tooltip !== b.tooltip) return false;
+  if (a.testId !== b.testId) return false;
+  if (a.pathTestId !== b.pathTestId) return false;
+  if (a.fromKey !== b.fromKey) return false;
+  if (a.toKey !== b.toKey) return false;
+  if (a.arrowheads !== b.arrowheads) return false;
+  if (a.parentPort !== b.parentPort) return false;
+  if (a.viaRouted !== b.viaRouted) return false;
+  if (a.selected !== b.selected) return false;
+  if (a.hx1 !== b.hx1 || a.hy1 !== b.hy1 || a.hx2 !== b.hx2 || a.hy2 !== b.hy2) return false;
+  if (a.coords.x1 !== b.coords.x1 || a.coords.y1 !== b.coords.y1 || a.coords.x2 !== b.coords.x2 || a.coords.y2 !== b.coords.y2) return false;
+  if (a.connIds.length !== b.connIds.length) return false;
+  for (let i = 0; i < a.connIds.length; i++) if (a.connIds[i] !== b.connIds[i]) return false;
+  const la = a.label, lb = b.label;
+  if ((la == null) !== (lb == null)) return false;
+  if (la != null && lb != null && (la.x !== lb.x || la.y !== lb.y || la.text !== lb.text || la.meta !== lb.meta || la.testId !== lb.testId)) return false;
+  const ba = a.badge, bb = b.badge;
+  if ((ba == null) !== (bb == null)) return false;
+  if (ba != null && bb != null && (ba.x !== bb.x || ba.y !== bb.y || ba.text !== bb.text || ba.title !== bb.title)) return false;
+  const va = a.via, vb = b.via;
+  if ((va == null) !== (vb == null)) return false;
+  if (va != null && vb != null && (va.x !== vb.x || va.y !== vb.y || va.name !== vb.name || va.kind !== vb.kind)) return false;
+  return true;
+}
+
+const SpecEdge = memo(SpecEdgeInner, specEdgeEqual);
 export default SpecEdge;

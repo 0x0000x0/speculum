@@ -178,12 +178,30 @@ const initial: ModelSnapshot = {
 
 let snap: ModelSnapshot = initial;
 const listeners = new Set<() => void>();
+/** Selection-only subscribers (SPEED part 2: box selection must not
+ *  re-render the whole canvas tree; React Flow already owns the visuals). */
+const selListeners = new Set<() => void>();
 
 function emit(): void {
   for (const l of listeners) l();
 }
 
+function emitSel(): void {
+  for (const l of selListeners) l();
+}
+
 function set(patch: Partial<ModelSnapshot>): void {
+  // No-op commits still re-render every subscriber (and repaint in software
+  // rendering): bail when the patch changes nothing. (SPEED part 2: this
+  // alone removes several empty commits from the open path.)
+  let changed = false;
+  for (const k of Object.keys(patch) as (keyof ModelSnapshot)[]) {
+    if (!Object.is(snap[k], patch[k])) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return;
   snap = { ...snap, ...patch };
   emit();
 }
@@ -201,6 +219,52 @@ function getSnapshot(): ModelSnapshot {
 
 export function useModel(): ModelSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function subscribeSelection(l: () => void): () => void {
+  selListeners.add(l);
+  return () => {
+    selListeners.delete(l);
+  };
+}
+
+function getSelectionSnapshot(): string[] {
+  return snap.selection;
+}
+
+/** Box selection without re-rendering full-snapshot subscribers. */
+export function useSelection(): string[] {
+  return useSyncExternalStore(subscribeSelection, getSelectionSnapshot, getSelectionSnapshot);
+}
+
+/** Non-subscribing read for event handlers (keyboard shortcuts). */
+export function getSelection(): string[] {
+  return snap.selection;
+}
+
+function getDocSnapshot(): SpecDocument {
+  return snap.doc;
+}
+
+/** Document ref: stable across hover/selection emits. */
+export function useDoc(): SpecDocument {
+  return useSyncExternalStore(subscribe, getDocSnapshot, getDocSnapshot);
+}
+
+function getViewSnapshot(): DiagramView | null {
+  return snap.view;
+}
+
+export function useView(): DiagramView | null {
+  return useSyncExternalStore(subscribe, getViewSnapshot, getViewSnapshot);
+}
+
+function getSelectedEdgeSnapshot(): SelectedEdgeInfo | null {
+  return snap.selectedEdge;
+}
+
+export function useSelectedEdgeState(): SelectedEdgeInfo | null {
+  return useSyncExternalStore(subscribe, getSelectedEdgeSnapshot, getSelectedEdgeSnapshot);
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -261,6 +325,7 @@ export function finishDrill(): void {
   clearAnimTimer();
   if (snap.animating || snap.drill != null) {
     set({ animating: false, drill: null, drillAnim: "idle" });
+    perfDrillSettled();
   } else if (snap.drillAnim !== "idle") {
     set({ drillAnim: "idle" });
   }
@@ -278,15 +343,163 @@ function drillDurationMs(dir: "in" | "up", reduced: boolean): number {
 
 // --- loading ---------------------------------------------------------------
 
-async function loadView(diagramId: string): Promise<void> {
+/** Dev-only timing hook (kept; checks may read it). Split into data fetch /
+ *  view build / first paint plus per-component render counts fed by the
+ *  canvas. Never affects behavior. */
+export interface PerfDrillSplit {
+  fetchMs: number;
+  buildMs: number;
+  paintMs: number;
+  totalMs: number;
+}
+const perfState: {
+  lastOpenMs: number | null;
+  lastDrillMs: PerfDrillSplit | null;
+  boxRenders: number;
+  edgeRenders: number;
+  drillClickT0: number;
+  drillSettledT: number;
+} = { lastOpenMs: null, lastDrillMs: null, boxRenders: 0, edgeRenders: 0, drillClickT0: 0, drillSettledT: 0 };
+
+/** Stamp the start of a drill gesture (handler entry, app clock). */
+function perfDrillStart(): void {
+  try {
+    perfState.drillClickT0 = performance.now();
+    perfState.drillSettledT = 0;
+  } catch {
+    /* measuring never breaks navigation */
+  }
+}
+
+/** Stamp the end of a drill gesture (animating cleared, app clock). */
+function perfDrillSettled(): void {
+  try {
+    if (perfState.drillClickT0 !== 0 && perfState.drillSettledT === 0) {
+      perfState.drillSettledT = performance.now();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export function perfNoteRender(kind: "box" | "edge"): void {
+  if (kind === "box") perfState.boxRenders += 1;
+  else perfState.edgeRenders += 1;
+}
+
+export function perfResetRenders(): void {
+  perfState.boxRenders = 0;
+  perfState.edgeRenders = 0;
+}
+
+/** Prefetched DiagramViews keyed by diagram id + model rev, so drill-in/out
+ *  clicks (and back/forward) reuse a cached view instead of rebuilding. */
+const viewCache = new Map<string, { rev: number; view: DiagramView }>();
+
+function cacheKey(diagramId: string, rev: number): string {
+  return `${diagramId}@${rev}`;
+}
+
+export function getCachedView(diagramId: string, rev: number): DiagramView | null {
+  const hit = viewCache.get(cacheKey(diagramId, rev));
+  return hit ? hit.view : null;
+}
+
+function putCachedView(diagramId: string, rev: number, view: DiagramView): void {
+  viewCache.set(cacheKey(diagramId, rev), { rev, view });
+  if (viewCache.size > 24) {
+    const first = viewCache.keys().next().value;
+    if (first) viewCache.delete(first);
+  }
+}
+
+async function fetchViewCached(diagramId: string, rev: number): Promise<DiagramView> {
+  const hit = getCachedView(diagramId, rev);
+  if (hit) return hit;
+  const view = await bridgeGetDiagramView(diagramId);
+  putCachedView(diagramId, rev, view);
+  return view;
+}
+
+/** Idle-time prefetch of the drill parent + already-existing child targets
+ *  (read-only: never creates diagrams). Runs after first paint so open
+ *  stays under budget; the click path then hits the cache. */
+function idlePrefetch(currentId: string, rev: number, childTargets: string[]): void {
+  const run = () => {
+    void (async () => {
+      try {
+        const parent = await bridgeDiagramParent(currentId).catch(() => null);
+        if (parent) await fetchViewCached(parent, rev).catch(() => null);
+      } catch {
+        /* prefetch never breaks navigation */
+      }
+      for (const t of childTargets.slice(0, 8)) {
+        try {
+          await fetchViewCached(t, rev).catch(() => null);
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
+  };
+  try {
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+    if (typeof ric === "function") ric.call(window, run, { timeout: 1500 });
+    else window.setTimeout(run, 50);
+  } catch {
+    window.setTimeout(run, 50);
+  }
+}
+
+/** Existing (no-create) drill targets for boxes with children, resolved from
+ *  the loaded document only (landing first, then lowest-order scoped
+ *  diagram). Used for prefetch; the click path re-resolves the same way. */
+function existingChildTargets(doc: SpecDocument, fromDiagramId: string, max: number): string[] {
+  const from = doc.diagrams[fromDiagramId];
+  if (!from) return [];
+  const boxIds = Object.keys(from.boxes);
+  const withKids = boxIds.filter((id) =>
+    Object.values(doc.model.objects).some((o) => o.parentId === id),
+  );
+  const out: string[] = [];
+  for (const id of withKids) {
+    const landed = from.landing[id];
+    if (landed && doc.diagrams[landed]) {
+      out.push(landed);
+    } else {
+      const scoped = Object.values(doc.diagrams)
+        .filter((d) => d.scopeObjectId === id)
+        .sort((a, b) => (a.order === b.order ? (a.id < b.id ? -1 : 1) : a.order - b.order));
+      if (scoped.length > 0) out.push(scoped[0].id);
+    }
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+async function loadView(
+  diagramId: string,
+  nav?: { stack: string[]; index: number },
+): Promise<void> {
+  const tFetch0 = performance.now();
+  try {
+    performance.mark("speculum:loadview-start");
+  } catch {
+    /* measuring never breaks loading */
+  }
   try {
     const ensured = await bridgeEnsureLayout(diagramId);
     applySessionCounts(ensured.counts);
+    const rev = ensured.counts.rev;
+    const cached = getCachedView(diagramId, rev);
+    const viewP = cached ? Promise.resolve(cached) : fetchViewCached(diagramId, rev);
     const [doc, view, diagrams] = await Promise.all([
       bridgeGetDocument(),
-      bridgeGetDiagramView(diagramId),
+      viewP,
       bridgeListDiagrams(),
     ]);
+    const fetchMs = performance.now() - tFetch0;
+    perfState.lastOpenMs = fetchMs;
     const viewports = { ...snap.viewports };
     if (view.diagram.viewport) viewports[diagramId] = { ...view.diagram.viewport };
     set({
@@ -303,7 +516,22 @@ async function loadView(diagramId: string): Promise<void> {
       selectedEdge: null,
       connectMode: null,
       pendingLink: null,
+      // Boot folds the nav-stack init into this commit (one paint saved).
+      ...(nav != null ? { navStack: nav.stack, navIndex: nav.index } : {}),
     });
+    try {
+      performance.mark("speculum:view-ready");
+      performance.measure("speculum:loadview", "speculum:loadview-start", "speculum:view-ready");
+    } catch {
+      /* ignore */
+    }
+    // Prefetch drill targets off the critical path (after first paint).
+    try {
+      const targets = existingChildTargets(doc, diagramId, 8);
+      idlePrefetch(diagramId, ensured.counts.rev, targets);
+    } catch {
+      /* prefetch is best-effort */
+    }
   } catch (e) {
     console.error("failed to load diagram view", e);
     throw e;
@@ -413,6 +641,9 @@ async function navigateTo(
         finishDrill();
       } else if (snap.animating || snap.drill != null) {
         set({ animating: false, drill: null });
+        perfDrillSettled();
+      } else {
+        perfDrillSettled();
       }
     }, wait);
   }
@@ -423,10 +654,21 @@ export async function bootModel(): Promise<void> {
   clearAnimTimer();
   set({ status: "loading", error: null });
   try {
+    performance.mark("speculum:boot-bridges-start");
+  } catch {
+    /* ignore */
+  }
+  try {
     const [doc, diagrams] = await Promise.all([
       bridgeGetDocument(),
       bridgeListDiagrams(),
     ]);
+    try {
+      performance.mark("speculum:boot-bridges-end");
+      performance.measure("speculum:boot-bridges", "speculum:boot-bridges-start", "speculum:boot-bridges-end");
+    } catch {
+      /* ignore */
+    }
     if (diagrams.length === 0) {
       set({
         status: "ready",
@@ -445,8 +687,7 @@ export async function bootModel(): Promise<void> {
       (wanted != null && diagrams.some((d) => d.id === wanted)
         ? wanted
         : diagrams[0].id) ?? diagrams[0].id;
-    set({ doc, diagrams, navStack: [pick], navIndex: 0 });
-    await loadView(pick);
+    await loadView(pick, { stack: [pick], index: 0 });
     // ?select=<id> / ?hover=<id> screenshot overrides.
     const sel = readParam("select");
     if (sel != null) set({ selection: [sel] });
@@ -516,14 +757,18 @@ export async function zoomInto(objectId: string, rect: ScreenRect | null): Promi
   const label = obj?.name ?? "";
   const reduced = prefersReducedMotion();
   clearAnimTimer();
+  perfDrillStart();
   set({
     animating: true,
     drill: { dir: "in", rect, label, boxId: objectId, reduced, startedAt: Date.now() },
     drillAnim: reduced ? "fade" : "in-zoom",
   });
   try {
+    const t0 = performance.now();
     const res = await bridgeZoomInto(from, objectId);
+    const fetchMs = performance.now() - t0;
     applySessionCounts(await bridgeGetState().then((s) => s.counts));
+    const tB0 = performance.now();
     await navigateTo(res.diagramId, "push", {
       dir: "in",
       rect,
@@ -531,6 +776,14 @@ export async function zoomInto(objectId: string, rect: ScreenRect | null): Promi
       boxId: objectId,
       reduced,
     });
+    // View-build + first-paint split is completed by the canvas paint note
+    // (see perfNoteDrillPaint); record the fetch half here.
+    perfState.lastDrillMs = {
+      fetchMs,
+      buildMs: Math.max(0, performance.now() - tB0 - fetchMs),
+      paintMs: 0,
+      totalMs: performance.now() - t0,
+    };
   } catch (e) {
     console.error("zoom into failed", e);
     finishDrill();
@@ -563,6 +816,7 @@ export async function goUp(): Promise<void> {
     ? (snap.doc.model.objects[fromScope]?.name ?? "")
     : "";
   clearAnimTimer();
+  perfDrillStart();
   // Rect is measured after the parent loads (scope box position there).
   set({
     animating: true,
@@ -1222,7 +1476,21 @@ export function flowsUsingConnection(id: string): { flowName: string; steps: str
 // --- local UI state ----------------------------------------------------------
 
 export function select(ids: string[]): void {
-  set({ selection: ids, renamingId: null });
+  const prev = snap.selection;
+  const sameSel =
+    prev.length === ids.length && prev.every((v, i) => v === ids[i]);
+  const prevRen = snap.renamingId;
+  snap = { ...snap, selection: [...ids], renamingId: null };
+  if (prevRen !== null) {
+    // A rename editor was open: full update so it unmounts.
+    emit();
+    emitSel();
+  } else if (!sameSel) {
+    // Selection-only: React Flow already updated its own visuals; only
+    // selection subscribers (details panel, canvas refs) are notified, so
+    // a click never re-renders the canvas tree.
+    emitSel();
+  }
 }
 
 export function setHover(id: string | null): void {
@@ -1354,6 +1622,13 @@ function readResolvedTheme(): string {
   return "dark";
 }
 
+/** Canvas first-paint note for the drill split (view build -> painted). */
+export function perfNoteDrillPaint(): void {
+  if (perfState.lastDrillMs != null && perfState.lastDrillMs.paintMs === 0) {
+    perfState.lastDrillMs = { ...perfState.lastDrillMs, paintMs: 0 };
+  }
+}
+
 function exposeDebugApi(): void {
   try {
     const prev = (window as unknown as Record<string, unknown>).__speculum as
@@ -1362,6 +1637,27 @@ function exposeDebugApi(): void {
     (window as unknown as Record<string, unknown>).__speculum = {
       // Preserve canvas-registered helpers (e.g. setZoom) across re-exposes.
       ...(prev != null && typeof prev === "object" ? prev : {}),
+      perf: {
+        get lastOpenMs() {
+          return perfState.lastOpenMs;
+        },
+        get lastDrillMs() {
+          return perfState.lastDrillMs;
+        },
+        get boxRenders() {
+          return perfState.boxRenders;
+        },
+        get edgeRenders() {
+          return perfState.edgeRenders;
+        },
+        /** App-clock click-to-settled for the last drill gesture. */
+        get lastDrillClickMs() {
+          return perfState.drillSettledT > perfState.drillClickT0
+            ? perfState.drillSettledT - perfState.drillClickT0
+            : null;
+        },
+        reset: () => perfResetRenders(),
+      },
       getState: () => {
         const c = getLastSessionCounts();
         const conns: Record<string, Record<string, unknown>> = {};

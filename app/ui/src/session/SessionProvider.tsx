@@ -107,8 +107,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     mounted.current = true;
+    try {
+      performance.mark("speculum:session-start");
+    } catch {
+      /* ignore */
+    }
     bridgeStartup()
       .then((res) => {
+        try {
+          performance.mark("speculum:session-ready");
+          performance.measure("speculum:session", "speculum:session-start", "speculum:session-ready");
+        } catch {
+          /* ignore */
+        }
         if (!mounted.current) return;
         applyCounts(res.counts);
         if (res.status === "needs_recovery" && res.recovery) {
