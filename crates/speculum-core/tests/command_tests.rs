@@ -97,7 +97,7 @@ fn all_variants_apply_invert_loop() {
         Command::CreateTagGroup { group: new_group },
         Command::CreateDomain { domain: new_domain },
         Command::CreateDiagram { diagram: new_diagram },
-        Command::PatchDiagram { id: "diag-context".to_string(), name: Some("Ctx2".to_string()), description: None, order: None, pinned: None, domain_id: None, auto_placed: None },
+        Command::PatchDiagram { id: "diag-context".to_string(), name: Some("Ctx2".to_string()), description: None, order: None, pinned: None, domain_id: None, auto_placed: None, show_all_labels: None },
         Command::AddToDiagram { diagram_id: "diag-context".to_string(), object_id: "obj-webapp".to_string(), rect: rect() },
         Command::MoveBoxes { diagram_id: "diag-context".to_string(), moves: BTreeMap::from([("obj-customer".to_string(), rect())]) },
         Command::ApplyLayout { diagram_id: "diag-context".to_string(), boxes: BTreeMap::from([("obj-customer".to_string(), rect())]) },

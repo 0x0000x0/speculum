@@ -168,6 +168,8 @@ pub enum Command {
         domain_id: Option<Option<Id>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auto_placed: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show_all_labels: Option<bool>,
     },
     AddToDiagram {
         diagram_id: Id,
@@ -1240,6 +1242,7 @@ impl Command {
                         pinned: None,
                         domain_id: Some(old),
                         auto_placed: None,
+                        show_all_labels: None,
                     });
                 }
                 Ok(Command::Batch { commands: inv })
@@ -1333,6 +1336,7 @@ impl Command {
                 pinned,
                 domain_id,
                 auto_placed,
+                show_all_labels,
             } => {
                 if let Some(Some(did)) = &domain_id {
                     if !doc.model.domains.contains_key(did) {
@@ -1345,6 +1349,7 @@ impl Command {
                 let touched_pinned = pinned.is_some();
                 let touched_domain = domain_id.is_some();
                 let touched_auto = auto_placed.is_some();
+                let touched_labels = show_all_labels.is_some();
                 let d = doc
                     .diagrams
                     .get_mut(&id)
@@ -1355,6 +1360,7 @@ impl Command {
                 let old_pinned = d.pinned;
                 let old_domain = d.domain_id.clone();
                 let old_auto = d.auto_placed;
+                let old_labels = d.show_all_labels;
                 if let Some(v) = name {
                     d.name = v;
                 }
@@ -1373,6 +1379,9 @@ impl Command {
                 if let Some(v) = auto_placed {
                     d.auto_placed = v;
                 }
+                if let Some(v) = show_all_labels {
+                    d.show_all_labels = v;
+                }
                 Ok(Command::PatchDiagram {
                     id,
                     name: if touched_name { Some(old_name) } else { None },
@@ -1381,6 +1390,7 @@ impl Command {
                     pinned: if touched_pinned { Some(old_pinned) } else { None },
                     domain_id: if touched_domain { Some(old_domain) } else { None },
                     auto_placed: if touched_auto { Some(old_auto) } else { None },
+                    show_all_labels: if touched_labels { Some(old_labels) } else { None },
                 })
             }
             Command::AddToDiagram {

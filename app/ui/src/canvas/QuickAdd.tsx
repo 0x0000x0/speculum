@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   addExistingToDiagram,
   createBox,
+  createBoxAndConnect,
   setQuickAdd,
   useModel,
   KIND_LABELS,
@@ -15,6 +16,7 @@ export default function QuickAdd() {
   const { quickAdd, doc, view } = useModel();
   const [kind, setKind] = useState<ObjectKind>("system");
   const [name, setName] = useState("");
+  const [linkName, setLinkName] = useState("");
 
   const candidates = useMemo(() => {
     if (view == null) return [];
@@ -27,6 +29,7 @@ export default function QuickAdd() {
   }, [doc, view, name]);
 
   if (quickAdd == null || view == null) return null;
+  const linking = quickAdd.pendingLink?.sourceKey;
 
   const style = {
     left: Math.min(quickAdd.screenX, window.innerWidth - 300),
@@ -35,20 +38,38 @@ export default function QuickAdd() {
 
   const commitCreate = () => {
     const label = KIND_LABELS[kind];
-    void createBox(kind, name.trim() === "" ? `New ${label}` : name.trim(), {
-      x: quickAdd.flowX - 120,
-      y: quickAdd.flowY - 60,
-    });
+    if (linking != null) {
+      // Drop-on-empty-canvas: object + box + link as ONE undo step.
+      if (linkName.trim() === "") return;
+      void createBoxAndConnect(
+        kind,
+        name.trim() === "" ? `New ${label}` : name.trim(),
+        { x: quickAdd.flowX - 120, y: quickAdd.flowY - 60 },
+        linking,
+        linkName.trim(),
+      );
+    } else {
+      void createBox(kind, name.trim() === "" ? `New ${label}` : name.trim(), {
+        x: quickAdd.flowX - 120,
+        y: quickAdd.flowY - 60,
+      });
+    }
     setQuickAdd(null);
   };
 
   return (
-    <div className="quick-add" style={style} role="dialog" aria-label="Add a box">
+    <div className="quick-add" style={style} role="dialog" aria-label="Add a box" data-testid="quick-add">
+      {linking != null && (
+        <div className="quick-add__linking" data-testid="quick-add-linking">
+          Link {doc.model.objects[linking]?.name ?? "Parent"} → new box
+        </div>
+      )}
       <div className="quick-add__types" role="group" aria-label="Box type">
         {KINDS.map((k) => (
           <button
             key={k}
             type="button"
+            data-testid={`quick-add-kind-${k}`}
             className={`quick-add__type${kind === k ? " quick-add__type--active" : ""}`}
             aria-pressed={kind === k}
             onClick={() => setKind(k)}
@@ -59,7 +80,8 @@ export default function QuickAdd() {
       </div>
       <input
         className="quick-add__name"
-        autoFocus
+        data-testid="quick-add-name"
+        autoFocus={linking == null}
         placeholder={`Name this ${KIND_LABELS[kind].toLowerCase()}…`}
         aria-label="Box name"
         value={name}
@@ -70,7 +92,23 @@ export default function QuickAdd() {
           else if (e.key === "Escape") setQuickAdd(null);
         }}
       />
-      {candidates.length > 0 && (
+      {linking != null && (
+        <input
+          className="quick-add__name"
+          autoFocus
+          placeholder="Name this link…"
+          aria-label="Link name"
+          data-testid="quick-add-link-name"
+          value={linkName}
+          onChange={(e) => setLinkName(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") commitCreate();
+            else if (e.key === "Escape") setQuickAdd(null);
+          }}
+        />
+      )}
+      {candidates.length > 0 && linking == null && (
         <ul className="quick-add__list" aria-label="Existing objects">
           {candidates.map((o) => (
             <li key={o.id}>
@@ -94,6 +132,7 @@ export default function QuickAdd() {
       )}
       <button
         type="button"
+        data-testid="quick-add-create"
         className="quick-add__create"
         onClick={commitCreate}
       >

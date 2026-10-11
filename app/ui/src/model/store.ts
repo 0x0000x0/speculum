@@ -35,6 +35,7 @@ import {
   type Viewport,
 } from "./types";
 import { endpointBox } from "./endpoints";
+import { PACKING } from "../canvas/edgeGeometry";
 
 export const KIND_LABELS: Record<ObjectKind, string> = {
   actor: "Actor",
@@ -55,6 +56,45 @@ export interface QuickAddState {
   screenY: number;
   flowX: number;
   flowY: number;
+  /** When set, confirming quick-add also links sourceKey -> the new box. */
+  pendingLink?: { sourceKey: string } | null;
+}
+
+/** View-only connect mode (never a command): pick source, then target. */
+export interface ConnectModeState {
+  source: string | null;
+  candidate: string | null;
+}
+
+/** Active canvas tool (view-only, never a command). */
+export type CanvasToolId =
+  | "select"
+  | "pan"
+  | "add-system"
+  | "add-app"
+  | "add-component"
+  | "add-store"
+  | "add-actor"
+  | "add-group"
+  | "connect"
+  | "note"
+  | "flow";
+
+/** A drag/drop that awaits a name (Enter commits, Esc cancels). */
+export interface PendingLink {
+  sourceKey: string;
+  targetKey: string;
+  screenX: number;
+  screenY: number;
+}
+
+/** View-only edge selection (never a command): which model link is open. */
+export interface SelectedEdgeInfo {
+  connId: string;
+  connIds: string[];
+  lower: boolean;
+  fromKey: string;
+  toKey: string;
 }
 
 export interface DrillState {
@@ -63,10 +103,17 @@ export interface DrillState {
   rect: ScreenRect | null;
   /** Box label shown on the snapshot overlay. */
   label: string;
+  /** Object id drilled from (in) or back into (up); null while measuring. */
+  boxId: string | null;
   /** Reduced motion: plain cross-fade, no scale transform. */
   reduced: boolean;
   startedAt: number;
 }
+
+/** Camera-transition phase for the drill animation (view-only, never saved).
+ *  "idle" (or null) when settled; otherwise "in-zoom" | "in-swap" |
+ *  "in-settle" | "up-zoom" | "up-swap" | "up-settle" | "fade". */
+export type DrillAnimPhase = string;
 
 interface ModelSnapshot {
   status: "loading" | "ready" | "error";
@@ -79,6 +126,7 @@ interface ModelSnapshot {
   hover: string | null;
   renamingId: string | null;
   toast: string | null;
+  toastUndo: boolean;
   quickAdd: QuickAddState | null;
   error: string | null;
   /** Browser-like navigation stack (diagram ids) and current position. */
@@ -87,8 +135,18 @@ interface ModelSnapshot {
   /** True while a drill animation is running. */
   animating: boolean;
   drill: DrillState | null;
+  /** Camera-transition phase (see DrillAnimPhase); "idle" when settled. */
+  drillAnim: DrillAnimPhase;
   /** Last saved viewport per diagram (exact pan/zoom restore). */
   viewports: Record<string, Viewport>;
+  /** Diagram "show all labels" (persisted per diagram via PatchDiagram). */
+  showAllLabels: boolean;
+  /** View-only connect mode + pending named link + selected edge. */
+  connectMode: ConnectModeState | null;
+  pendingLink: PendingLink | null;
+  selectedEdge: SelectedEdgeInfo | null;
+  /** Active left-bar tool (default "select"). */
+  tool: CanvasToolId;
 }
 
 const initial: ModelSnapshot = {
@@ -102,13 +160,20 @@ const initial: ModelSnapshot = {
   hover: null,
   renamingId: null,
   toast: null,
+  toastUndo: true,
   quickAdd: null,
   error: null,
   navStack: [],
   navIndex: -1,
   animating: false,
   drill: null,
+  drillAnim: "idle",
   viewports: {},
+  showAllLabels: false,
+  connectMode: null,
+  pendingLink: null,
+  selectedEdge: null,
+  tool: "select",
 };
 
 let snap: ModelSnapshot = initial;
@@ -195,13 +260,20 @@ function clearAnimTimer(): void {
 export function finishDrill(): void {
   clearAnimTimer();
   if (snap.animating || snap.drill != null) {
-    set({ animating: false, drill: null });
+    set({ animating: false, drill: null, drillAnim: "idle" });
+  } else if (snap.drillAnim !== "idle") {
+    set({ drillAnim: "idle" });
   }
+}
+
+/** Set the camera-transition phase (view-only; written by FlowCanvas). */
+export function setDrillPhase(phase: DrillAnimPhase): void {
+  if (snap.drillAnim !== phase) set({ drillAnim: phase });
 }
 
 function drillDurationMs(dir: "in" | "up", reduced: boolean): number {
   if (reduced) return 120;
-  return dir === "in" ? 240 : 200;
+  return dir === "in" ? 200 : 200;
 }
 
 // --- loading ---------------------------------------------------------------
@@ -227,6 +299,10 @@ async function loadView(diagramId: string): Promise<void> {
       selection: snap.selection.filter((id) => view.diagram.boxes[id] != null),
       error: null,
       viewports,
+      showAllLabels: view.diagram.showAllLabels ?? false,
+      selectedEdge: null,
+      connectMode: null,
+      pendingLink: null,
     });
   } catch (e) {
     console.error("failed to load diagram view", e);
@@ -260,7 +336,7 @@ async function navigateTo(
   const reduced = drill?.reduced ?? prefersReducedMotion();
   const duration = drill ? drillDurationMs(drill.dir, reduced) : 0;
   // Anchor the animation to the navigation start so the measured
-  // click-to-settled duration matches the motion tokens (~240/200/120ms)
+  // click-to-settled duration matches the motion tokens (~200/200/120ms)
   // even when the backend round-trip takes tens of ms.
   const t0 = Date.now();
   if (snap.diagramId != null && snap.diagramId !== targetId) {
@@ -297,16 +373,23 @@ async function navigateTo(
     }
   }
   set({ selection: [], hover: null, renamingId: null, quickAdd: null });
+  set({ connectMode: null, pendingLink: null, selectedEdge: null });
   if (drill) {
     clearAnimTimer();
     set({
       animating: true,
       drill: { ...drill, reduced, startedAt: Date.now() },
+      drillAnim: reduced ? "fade" : drill.dir === "in" ? "in-zoom" : "up-zoom",
       navStack: stack,
       navIndex: idx,
     });
   } else {
-    set({ navStack: stack, navIndex: idx });
+    // Plain navigation cancels any running camera sequence.
+    if (snap.drillAnim !== "idle" || snap.animating || snap.drill != null) {
+      set({ navStack: stack, navIndex: idx, animating: false, drill: null, drillAnim: "idle" });
+    } else {
+      set({ navStack: stack, navIndex: idx });
+    }
   }
   try {
     await loadView(targetId);
@@ -319,12 +402,18 @@ async function navigateTo(
   if (drill) {
     // The target viewport is applied synchronously by the canvas layout
     // effect before paint (no pop); the timer only ends the overlay/fade,
-    // anchored to the navigation start (see t0 above).
+    // anchored to the navigation start (see t0 above). The camera phases
+    // (drillAnim) belong to the canvas: the store timer clears them only
+    // on the reduced-motion path (the canvas never touches phases there).
     clearAnimTimer();
     const wait = Math.max(0, duration - (Date.now() - t0));
     animTimer = window.setTimeout(() => {
       animTimer = null;
-      finishDrill();
+      if (reduced) {
+        finishDrill();
+      } else if (snap.animating || snap.drill != null) {
+        set({ animating: false, drill: null });
+      }
     }, wait);
   }
 }
@@ -376,6 +465,49 @@ export async function openDiagram(diagramId: string): Promise<void> {
   await navigateTo(diagramId, "push", null);
 }
 
+/**
+ * Navigate to the diagram where an object lives (context-tray child click),
+ * with the drill-in camera transition. Prefers the lowest-order diagram
+ * boxing the object; falls back to zoomInto (landing / scoped diagram).
+ */
+export async function goToObjectDiagram(objectId: string, rect: ScreenRect | null): Promise<void> {
+  const from = snap.diagramId;
+  if (from == null) return;
+  const holders = Object.values(snap.doc.diagrams)
+    .filter((d) => d.id !== from && d.boxes[objectId] != null)
+    .sort((a, b) =>
+      a.order === b.order
+        ? a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+        : a.order - b.order,
+    );
+  const target = holders.length > 0 ? holders[0].id : null;
+  const obj = snap.doc.model.objects[objectId];
+  const label = obj?.name ?? "";
+  const reduced = prefersReducedMotion();
+  clearAnimTimer();
+  set({
+    animating: true,
+    drill: { dir: "in", rect, label, boxId: objectId, reduced, startedAt: Date.now() },
+    drillAnim: reduced ? "fade" : "in-zoom",
+  });
+  // Camera beat on the current view before the swap (this path has no
+  // external timing constraints, unlike badge/Enter drills).
+  if (!reduced) {
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  if (target == null) {
+    await zoomInto(objectId, rect);
+    return;
+  }
+  await navigateTo(target, "push", {
+    dir: "in",
+    rect,
+    label,
+    boxId: objectId,
+    reduced,
+  });
+}
+
 /** Drill into a box (badge click, Enter, details button). */
 export async function zoomInto(objectId: string, rect: ScreenRect | null): Promise<void> {
   const from = snap.diagramId;
@@ -386,7 +518,8 @@ export async function zoomInto(objectId: string, rect: ScreenRect | null): Promi
   clearAnimTimer();
   set({
     animating: true,
-    drill: { dir: "in", rect, label, reduced, startedAt: Date.now() },
+    drill: { dir: "in", rect, label, boxId: objectId, reduced, startedAt: Date.now() },
+    drillAnim: reduced ? "fade" : "in-zoom",
   });
   try {
     const res = await bridgeZoomInto(from, objectId);
@@ -395,6 +528,7 @@ export async function zoomInto(objectId: string, rect: ScreenRect | null): Promi
       dir: "in",
       rect,
       label,
+      boxId: objectId,
       reduced,
     });
   } catch (e) {
@@ -432,35 +566,10 @@ export async function goUp(): Promise<void> {
   // Rect is measured after the parent loads (scope box position there).
   set({
     animating: true,
-    drill: { dir: "up", rect: null, label, reduced, startedAt: Date.now() },
+    drill: { dir: "up", rect: null, label, boxId: fromScope, reduced, startedAt: Date.now() },
+    drillAnim: reduced ? "fade" : "up-zoom",
   });
-  await navigateTo(target, "up", { dir: "up", rect: null, label, reduced });
-  // Now the parent view is rendered with its viewport pre-applied: measure
-  // where the scope box sits so the overlay can shrink into it.
-  if (fromScope) {
-    try {
-      const el = document.querySelector(
-        `[data-testid="box-${CSS.escape(fromScope)}"]`,
-      );
-      const canvas = document.querySelector(".flow-canvas");
-      if (el && canvas) {
-        const r = el.getBoundingClientRect();
-        const c = canvas.getBoundingClientRect();
-        set({
-          drill: {
-            dir: "up",
-            rect: { x: r.x - c.x, y: r.y - c.y, w: r.width, h: r.height },
-            label,
-            reduced,
-            startedAt: Date.now(),
-          },
-          animating: true,
-        });
-      }
-    } catch {
-      /* measuring must never break navigation */
-    }
-  }
+  await navigateTo(target, "up", { dir: "up", rect: null, label, boxId: fromScope, reduced });
 }
 
 /** Back through the nav stack (Alt+Left, mouse button 3). No animation. */
@@ -489,33 +598,10 @@ export async function crumbTo(diagramId: string): Promise<void> {
   clearAnimTimer();
   set({
     animating: true,
-    drill: { dir: "up", rect: null, label, reduced, startedAt: Date.now() },
+    drill: { dir: "up", rect: null, label, boxId: fromScope, reduced, startedAt: Date.now() },
+    drillAnim: reduced ? "fade" : "up-zoom",
   });
-  await navigateTo(diagramId, "up", { dir: "up", rect: null, label, reduced });
-  if (fromScope && snap.view?.diagram.boxes[fromScope]) {
-    try {
-      const el = document.querySelector(
-        `[data-testid="box-${CSS.escape(fromScope)}"]`,
-      );
-      const canvas = document.querySelector(".flow-canvas");
-      if (el && canvas) {
-        const r = el.getBoundingClientRect();
-        const c = canvas.getBoundingClientRect();
-        set({
-          drill: {
-            dir: "up",
-            rect: { x: r.x - c.x, y: r.y - c.y, w: r.width, h: r.height },
-            label,
-            reduced,
-            startedAt: Date.now(),
-          },
-          animating: true,
-        });
-      }
-    } catch {
-      /* ignore */
-    }
-  }
+  await navigateTo(diagramId, "up", { dir: "up", rect: null, label, boxId: fromScope, reduced });
 }
 
 export async function setLandingTarget(
@@ -555,6 +641,7 @@ export async function syncIfStale(): Promise<void> {
       rev: s.counts.rev,
       selection: snap.selection.filter((id) => view.diagram.boxes[id] != null),
       viewports,
+      showAllLabels: view.diagram.showAllLabels ?? false,
     });
   } catch (e) {
     // Polling must never break the canvas, but a failed reload (e.g. a
@@ -576,6 +663,15 @@ async function refreshAfter(countsRev: number): Promise<void> {
       const viewports = { ...snap.viewports };
       if (view.diagram.viewport)
         viewports[snap.diagramId] = { ...view.diagram.viewport };
+      // Keep a selected edge while its connection still exists in the
+      // model (implicit roll-up edges are never in diagram.connections).
+      let selectedEdge = snap.selectedEdge;
+      if (
+        selectedEdge != null &&
+        doc.model.connections[selectedEdge.connId] == null
+      ) {
+        selectedEdge = null;
+      }
       set({
         doc,
         diagrams,
@@ -583,6 +679,8 @@ async function refreshAfter(countsRev: number): Promise<void> {
         rev: countsRev,
         selection: snap.selection.filter((id) => view.diagram.boxes[id] != null),
         viewports,
+        showAllLabels: view.diagram.showAllLabels ?? false,
+        selectedEdge,
       });
     } else if (diagrams.length > 0) {
       set({ doc, diagrams });
@@ -758,6 +856,369 @@ export async function renameObject(id: string, name: string): Promise<void> {
   set({ renamingId: null });
 }
 
+// --- connections (M6p2: every model change is one core Command) ---------------
+
+let connCounter = 0;
+export function newConnectionId(): string {
+  connCounter += 1;
+  return `conn-${Date.now().toString(36)}-${connCounter}`;
+}
+
+/** Resolve an object to its boxed endpoint key on this diagram. */
+function endpointKeyFor(
+  doc: SpecDocument,
+  diagramId: string,
+  objectId: string,
+): string | null {
+  const d = doc.diagrams[diagramId];
+  if (!d) return null;
+  if (d.scopeObjectId === objectId) return "__frame__";
+  if (d.boxes[objectId]) return objectId;
+  const seen = new Set<string>([objectId]);
+  let cur = doc.model.objects[objectId]?.parentId ?? null;
+  while (cur) {
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    if (d.boxes[cur]) return cur;
+    cur = doc.model.objects[cur]?.parentId ?? null;
+  }
+  return null;
+}
+
+function objectKeyToId(key: string, diagramId: string): string | null {
+  if (key === "__frame__") {
+    return snap.view?.diagram.scopeObjectId ?? snap.doc.diagrams[diagramId]?.scopeObjectId ?? null;
+  }
+  return key;
+}
+
+/**
+ * Create one labeled link as ONE Batch (Connect + ShowConnection = one undo
+ * step). Unnamed links are never created (callers drop empty names).
+ */
+export async function createConnection(
+  diagramId: string,
+  sourceKey: string,
+  targetKey: string,
+  name: string,
+): Promise<string | null> {
+  const clean = name.trim();
+  if (clean === "") return null;
+  if (sourceKey === targetKey) return null;
+  const originId = objectKeyToId(sourceKey, diagramId);
+  const targetId = objectKeyToId(targetKey, diagramId);
+  if (!originId || !targetId) return null;
+  if (!snap.doc.model.objects[originId] || !snap.doc.model.objects[targetId])
+    return null;
+  const id = newConnectionId();
+  await dispatchAndRefresh({
+    op: "batch",
+    commands: [
+      {
+        op: "connect",
+        connection: {
+          id,
+          originId,
+          targetId,
+          name: clean,
+          description: "",
+          direction: "outgoing",
+          status: "live",
+          lineShape: "curved",
+          tagIds: [],
+          technologies: [],
+          links: [],
+        },
+      },
+      {
+        op: "showConnection",
+        diagramId,
+        connectionId: id,
+        layout: { waypoints: [] },
+      },
+    ],
+  });
+  return id;
+}
+
+/** Show an existing model link on this diagram (no duplicate created). */
+export async function showExistingConnection(
+  diagramId: string,
+  connectionId: string,
+): Promise<void> {
+  await dispatchAndRefresh({
+    op: "showConnection",
+    diagramId,
+    connectionId,
+    layout: { waypoints: [] },
+  });
+}
+
+/** Hide a link from this diagram (model keeps it; toast offers Undo). */
+export async function hideConnection(
+  diagramId: string,
+  connectionId: string,
+): Promise<void> {
+  const shown = snap.view?.diagram.connections[connectionId] != null;
+  if (!shown) {
+    showToast("Nothing to hide — this link is only rolled up here", false);
+    return;
+  }
+  try {
+    await dispatchAndRefresh({ op: "hideConnection", diagramId, connectionId });
+  } catch (e) {
+    console.error("hide connection failed", e);
+    showToast("Could not hide link", false);
+    return;
+  }
+  set({ selectedEdge: null, toast: "Hidden from diagram" });
+}
+
+/** Delete a link from the model entirely (diagrams + flow steps follow). */
+export async function deleteConnectionFromModel(id: string): Promise<void> {
+  await dispatchAndRefresh({ op: "deleteConnection", id });
+  set({ selectedEdge: null });
+}
+
+export async function patchConnection(
+  id: string,
+  patch: Partial<{
+    name: string;
+    description: string;
+    direction: "outgoing" | "bidirectional" | "none";
+    status: "live" | "future" | "deprecated" | "removed";
+    lineShape: "curved" | "straight" | "square";
+    viaId: string | null;
+    tagIds: string[];
+    originId: string;
+    targetId: string;
+  }>,
+): Promise<void> {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined) clean[k] = v;
+  }
+  if (Object.keys(clean).length === 0) return;
+  await dispatchAndRefresh({ op: "patchConnection", id, patch: clean as never });
+}
+
+/** Persist the label slide for this diagram (one ShowConnection undo step). */
+export async function setEdgeLabelPosition(
+  diagramId: string,
+  connectionId: string,
+  t: number,
+): Promise<void> {
+  const clamped = Math.min(Math.max(t, 0), 1);
+  const prev = snap.view?.diagram.connections[connectionId];
+  await dispatchAndRefresh({
+    op: "showConnection",
+    diagramId,
+    connectionId,
+    layout: { labelPosition: clamped, waypoints: prev?.waypoints ?? [] },
+  });
+}
+
+/**
+ * Re-point a link's end. "change" patches the model link (one undo step);
+ * "new" keeps the old link and creates + shows a copy (one Batch undo step).
+ */
+export async function repointConnection(
+  diagramId: string,
+  connectionId: string,
+  end: "from" | "to",
+  newKey: string,
+  mode: "change" | "new",
+): Promise<void> {
+  const conn = snap.doc.model.connections[connectionId];
+  if (!conn) return;
+  const newId = objectKeyToId(newKey, diagramId);
+  if (!newId || !snap.doc.model.objects[newId]) return;
+  if (mode === "change") {
+    await patchConnection(connectionId, {
+      [end === "from" ? "originId" : "targetId"]: newId,
+    } as never);
+    return;
+  }
+  const id = newConnectionId();
+  await dispatchAndRefresh({
+    op: "batch",
+    commands: [
+      {
+        op: "connect",
+        connection: {
+          ...structuredClone(conn),
+          id,
+          originId: end === "from" ? newId : conn.originId,
+          targetId: end === "to" ? newId : conn.targetId,
+        },
+      },
+      { op: "showConnection", diagramId, connectionId: id, layout: { waypoints: [] } },
+    ],
+  });
+}
+
+/**
+ * Drop-on-empty-canvas: create the object at the point, add its box, and
+ * link sourceKey -> it, all as ONE Batch undo step.
+ */
+export async function createBoxAndConnect(
+  kind: ObjectKind,
+  name: string,
+  at: { x: number; y: number },
+  sourceKey: string,
+  linkName: string,
+): Promise<void> {
+  const view = snap.view;
+  if (view == null) return;
+  const clean = linkName.trim();
+  if (clean === "") return;
+  const originId = objectKeyToId(sourceKey, view.diagram.id);
+  if (!originId) return;
+  const id = newObjectId();
+  const connId = newConnectionId();
+  const label = KIND_LABELS[kind];
+  await dispatchAndRefresh({
+    op: "batch",
+    commands: [
+      {
+        op: "createObject",
+        object: {
+          id,
+          name: name.trim() === "" ? `New ${label}` : name.trim(),
+          type: kind,
+          parentId: view.diagram.scopeObjectId ?? null,
+          status: "live",
+          external: false,
+          caption: "",
+          description: "",
+          tagIds: [],
+          technologies: [],
+          links: [],
+          groupIds: [],
+          labels: {},
+        },
+      },
+      {
+        op: "addToDiagram",
+        diagramId: view.diagram.id,
+        objectId: id,
+        rect: { x: snap8(at.x), y: snap8(at.y), w: 240, h: 120 },
+      },
+      {
+        op: "connect",
+        connection: {
+          id: connId,
+          originId,
+          targetId: id,
+          name: clean,
+          description: "",
+          direction: "outgoing",
+          status: "live",
+          lineShape: "curved",
+          tagIds: [],
+          technologies: [],
+          links: [],
+        },
+      },
+      {
+        op: "showConnection",
+        diagramId: view.diagram.id,
+        connectionId: connId,
+        layout: { waypoints: [] },
+      },
+    ],
+  });
+  set({ selection: [id] });
+}
+
+/**
+ * Existing model links between the same two endpoints (or descendants
+ * rolled up to them) that are NOT shown on this diagram: reuse candidates.
+ */
+export function reuseCandidates(
+  diagramId: string,
+  sourceKey: string,
+  targetKey: string,
+): { id: string; name: string; originId: string; targetId: string }[] {
+  const doc = snap.doc;
+  const out: { id: string; name: string; originId: string; targetId: string }[] = [];
+  const shown = doc.diagrams[diagramId]?.connections ?? {};
+  for (const c of Object.values(doc.model.connections)) {
+    if (shown[c.id] != null) continue;
+    const f = endpointKeyFor(doc, diagramId, c.originId);
+    const t = endpointKeyFor(doc, diagramId, c.targetId);
+    if (f == null || t == null) continue;
+    const same =
+      (f === sourceKey && t === targetKey) || (f === targetKey && t === sourceKey);
+    if (same) out.push({ id: c.id, name: c.name, originId: c.originId, targetId: c.targetId });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Underlying real links of a rolled-up edge, with add-ability reasons. */
+export function lowerConnections(diagramId: string, connIds: string[]): {
+  id: string;
+  name: string;
+  originName: string;
+  targetName: string;
+  addable: boolean;
+  reason: string | null;
+}[] {
+  const doc = snap.doc;
+  const d = doc.diagrams[diagramId];
+  return connIds.map((cid) => {
+    const c = doc.model.connections[cid];
+    if (!c) {
+      return { id: cid, name: "", originName: "", targetName: "", addable: false, reason: "Link no longer exists." };
+    }
+    const originName = doc.model.objects[c.originId]?.name ?? c.originId;
+    const targetName = doc.model.objects[c.targetId]?.name ?? c.targetId;
+    if (d?.connections[cid] != null) {
+      return { id: cid, name: c.name, originName, targetName, addable: false, reason: "Already on this diagram." };
+    }
+    const missing: string[] = [];
+    if (!d?.boxes[c.originId]) missing.push(originName);
+    if (!d?.boxes[c.targetId]) missing.push(targetName);
+    if (missing.length > 0) {
+      return {
+        id: cid,
+        name: c.name,
+        originName,
+        targetName,
+        addable: false,
+        reason: `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not on this diagram.`,
+      };
+    }
+    return { id: cid, name: c.name, originName, targetName, addable: true, reason: null };
+  });
+}
+
+/** Flows/steps that use a connection (for the delete confirm dialog). */
+export function flowsUsingConnection(id: string): { flowName: string; steps: string[] }[] {
+  const out: { flowName: string; steps: string[] }[] = [];
+  const touches = (s: unknown, acc: string[]): void => {
+    if (typeof s !== "object" || s === null) return;
+    const r = s as Record<string, unknown>;
+    if (r["viaConnectionId"] === id) {
+      acc.push(typeof r["title"] === "string" ? (r["title"] as string) : "Untitled step");
+    }
+    const paths = r["paths"];
+    if (Array.isArray(paths)) {
+      for (const p of paths) {
+        const steps = (p as Record<string, unknown>)?.["steps"];
+        if (Array.isArray(steps)) for (const st of steps) touches(st, acc);
+      }
+    }
+  };
+  for (const f of Object.values(snap.doc.model.flows)) {
+    const steps: string[] = [];
+    if (Array.isArray(f.steps)) for (const st of f.steps) touches(st, steps);
+    if (steps.length > 0) out.push({ flowName: f.name, steps });
+  }
+  return out;
+}
+
 // --- local UI state ----------------------------------------------------------
 
 export function select(ids: string[]): void {
@@ -772,8 +1233,8 @@ export function setRenaming(id: string | null): void {
   set({ renamingId: id });
 }
 
-export function showToast(text: string): void {
-  set({ toast: text });
+export function showToast(text: string, undo = true): void {
+  set({ toast: text, toastUndo: undo });
 }
 
 export function clearToast(): void {
@@ -782,6 +1243,103 @@ export function clearToast(): void {
 
 export function setQuickAdd(q: QuickAddState | null): void {
   set({ quickAdd: q });
+}
+
+/** Diagram "show all labels": persisted per diagram via PatchDiagram. */
+export async function toggleShowAllLabels(): Promise<void> {
+  const view = snap.view;
+  if (view == null) return;
+  const next = !(view.diagram.showAllLabels ?? false);
+  await dispatchAndRefresh({
+    op: "patchDiagram",
+    id: view.diagram.id,
+    showAllLabels: next,
+  });
+}
+
+export function setConnectMode(m: ConnectModeState | null): void {
+  if (snap.connectMode !== m) set({ connectMode: m });
+}
+
+export function setPendingLink(p: PendingLink | null): void {
+  if (snap.pendingLink !== p) set({ pendingLink: p });
+}
+
+export function setSelectedEdge(s: SelectedEdgeInfo | null): void {
+  if (snap.selectedEdge !== s) set({ selectedEdge: s });
+}
+
+export function setTool(t: CanvasToolId): void {
+  if (snap.tool === t) return;
+  // Entering / leaving connect mode follows the tool: connect tool arms the
+  // keyboard connect mode (source picked by click); leaving it disarms.
+  if (t === "connect") {
+    set({ tool: t });
+    if (snap.connectMode == null) {
+      const sel = snap.selection.length === 1 ? snap.selection[0] : null;
+      set({ connectMode: { source: sel, candidate: null } });
+    }
+    return;
+  }
+  if (snap.tool === "connect" && snap.connectMode != null) {
+    set({ tool: t, connectMode: null });
+    return;
+  }
+  set({ tool: t });
+}
+
+// --- canvas debug mirrors (view-only; written by FlowCanvas each render) ---
+
+export interface SublinkInfo {
+  testId: string;
+  edgeIndex: number;
+  subIndex: number;
+  connId: string;
+  connIds: string[];
+  name: string;
+  direction: string;
+  arrowheads: number;
+  status: string;
+  lineShape: string;
+  lower: boolean;
+  viaId: string | null;
+  viaRouted: boolean;
+  labelPosition: number | null;
+  fromKey: string;
+  toKey: string;
+  parentPort: boolean;
+  labelVisible: boolean;
+}
+
+let debugZoom: number | null = null;
+let debugFrame: Rect | null = null;
+let debugCtxRects: Record<string, Rect> = {};
+let debugHoverEdge: string | null = null;
+let debugSelectedEdges: string[] = [];
+let debugSublinks: SublinkInfo[] = [];
+
+export function setDebugZoom(z: number): void {
+  debugZoom = z;
+}
+
+export function setDebugFrameRect(r: Rect | null): void {
+  debugFrame = r ? { ...r } : null;
+}
+
+export function setDebugCtxRects(r: Record<string, Rect>): void {
+  debugCtxRects = { ...r };
+}
+
+export function setDebugHoverEdge(k: string | null): void {
+  debugHoverEdge = k;
+}
+
+export function setDebugSelectedEdges(ids: string[]): void {
+  debugSelectedEdges = [...ids];
+}
+
+export function setDebugSublinks(s: SublinkInfo[]): void {
+  debugSublinks = [...s];
 }
 
 // --- read-only debug API for automated checks --------------------------------
@@ -798,9 +1356,27 @@ function readResolvedTheme(): string {
 
 function exposeDebugApi(): void {
   try {
+    const prev = (window as unknown as Record<string, unknown>).__speculum as
+      | Record<string, unknown>
+      | undefined;
     (window as unknown as Record<string, unknown>).__speculum = {
+      // Preserve canvas-registered helpers (e.g. setZoom) across re-exposes.
+      ...(prev != null && typeof prev === "object" ? prev : {}),
       getState: () => {
         const c = getLastSessionCounts();
+        const conns: Record<string, Record<string, unknown>> = {};
+        for (const [id, conn] of Object.entries(snap.doc.model.connections)) {
+          conns[id] = {
+            name: conn.name,
+            originId: conn.originId,
+            targetId: conn.targetId,
+            direction: conn.direction,
+            status: conn.status,
+            lineShape: conn.lineShape,
+            viaId: conn.viaId ?? null,
+            labelPosition: conn.labelPosition ?? null,
+          };
+        }
         return {
           diagramId: snap.diagramId,
           rects: snap.view ? { ...snap.view.diagram.boxes } : {},
@@ -815,9 +1391,26 @@ function exposeDebugApi(): void {
           navStack: [...snap.navStack],
           navIndex: snap.navIndex,
           animating: snap.animating,
+          drillAnim: snap.drillAnim,
           drillDuration:
             snap.drill != null ? Date.now() - snap.drill.startedAt : null,
           scope: snap.view?.scope?.id ?? snap.view?.diagram.scopeObjectId ?? null,
+          contextTrays: snap.view?.contextTrays ? structuredClone(snap.view.contextTrays) : [],
+          // V1: scope tray subtitle + packing constants for checks.
+          scopeInfo: (() => {
+            const s = snap.view?.scope;
+            if (s == null) return null;
+            const o = snap.doc.model.objects[s.id] as unknown as
+              | { caption?: string }
+              | undefined;
+            return {
+              id: s.id,
+              name: s.name,
+              kind: s.kind,
+              caption: o?.caption ?? "",
+            };
+          })(),
+          layout: { ...PACKING },
           edges: snap.view
             ? snap.view.edges.map((e) => ({
                 from: endpointBox(e.from),
@@ -827,6 +1420,22 @@ function exposeDebugApi(): void {
           viewports: Object.fromEntries(
             Object.entries(snap.viewports).map(([k, v]) => [k, { ...v }]),
           ),
+          // M6: edge + frame introspection for automated checks.
+          zoom: debugZoom,
+          showAllLabels: snap.showAllLabels,
+          labelsOn: snap.view?.diagram.showAllLabels ?? false,
+          frameRect: debugFrame ? { ...debugFrame } : null,
+          ctxRects: { ...debugCtxRects },
+          hoverEdge: debugHoverEdge,
+          selectedEdges: [...debugSelectedEdges],
+          selectedEdge: snap.selectedEdge ? { ...snap.selectedEdge } : null,
+          connectMode: snap.connectMode ? { ...snap.connectMode } : null,
+          pendingLink: snap.pendingLink ? { ...snap.pendingLink } : null,
+          quickAdd: snap.quickAdd ? { ...snap.quickAdd } : null,
+          shownConnections: snap.view ? Object.keys(snap.view.diagram.connections).sort() : [],
+          sublinks: debugSublinks.map((s) => ({ ...s })),
+          connections: conns,
+          tool: snap.tool,
         };
       },
     };

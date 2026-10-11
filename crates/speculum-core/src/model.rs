@@ -342,6 +342,8 @@ pub struct Diagram {
     #[serde(default)]
     pub auto_placed: bool,
     #[serde(default)]
+    pub show_all_labels: bool,
+    #[serde(default)]
     pub created: String,
     #[serde(default)]
     pub modified: String,
@@ -365,6 +367,7 @@ impl Default for Diagram {
             viewport: None,
             landing: BTreeMap::new(),
             auto_placed: false,
+            show_all_labels: false,
             created: String::new(),
             modified: String::new(),
             extra: BTreeMap::new(),

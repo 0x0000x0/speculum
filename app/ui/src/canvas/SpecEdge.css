@@ -1,0 +1,220 @@
+/* specEdge: neutral-grey bezier links, dark label pills, count badges.
+   All colors/type/radii/motion/widths come from generated CSS vars. */
+
+.spec-edge {
+  color: var(--sp-color-edge);
+}
+
+.spec-edge__halo {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16px;
+  pointer-events: visibleStroke;
+}
+
+.spec-edge__path {
+  fill: none;
+  stroke: var(--sp-color-edge);
+  stroke-width: var(--sp-edge-stroke);
+  stroke-linecap: round;
+  stroke-dasharray: none;
+}
+
+.spec-edge__arrow {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Status links keep their muted colours, always solid (no dashes). */
+.spec-edge--status-future {
+  color: var(--sp-color-state-info);
+}
+.spec-edge--status-future .spec-edge__path {
+  stroke: var(--sp-color-state-info);
+  stroke-width: 1px;
+  stroke-dasharray: none;
+}
+.spec-edge--status-deprecated {
+  color: var(--sp-color-state-warning);
+}
+.spec-edge--status-deprecated .spec-edge__path {
+  stroke: var(--sp-color-state-warning);
+  stroke-dasharray: none;
+}
+.spec-edge--status-removed {
+  color: var(--sp-color-state-danger);
+  opacity: 0.5;
+}
+.spec-edge--status-removed .spec-edge__path {
+  stroke: var(--sp-color-state-danger);
+  stroke-dasharray: none;
+}
+
+/* Rolled-up (lower) links stay solid; the count badge marks them. */
+.spec-edge--lower .spec-edge__path {
+  stroke-dasharray: none;
+}
+
+/* Highlight: solid edge-hi, 2px, gentle opacity pulse (no dashes). */
+.spec-edge--hi {
+  color: var(--sp-color-edge-hi);
+}
+.spec-edge--hi .spec-edge__path {
+  stroke: var(--sp-color-edge-hi);
+  stroke-width: var(--sp-edge-stroke-hi);
+  stroke-dasharray: none;
+  animation: sp-pulse 1.6s ease-in-out infinite;
+}
+.spec-edge--hi .spec-edge__arrow {
+  fill: var(--sp-color-edge-hi);
+}
+
+/* Selected link: accent colour with the pulse. */
+.spec-edge--selected {
+  color: var(--sp-color-accent-primary);
+}
+.spec-edge--selected .spec-edge__path {
+  stroke: var(--sp-color-accent-primary);
+  stroke-width: var(--sp-edge-stroke-hi);
+  stroke-dasharray: none;
+  animation: sp-pulse 1.4s ease-in-out infinite;
+}
+.spec-edge--selected .spec-edge__arrow {
+  fill: var(--sp-color-accent-primary);
+}
+
+@keyframes sp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spec-edge--hi .spec-edge__path,
+  .spec-edge--selected .spec-edge__path {
+    animation: none;
+  }
+}
+
+/* foreignObject wrappers must not block canvas input except on pills. */
+.spec-edge__fo {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.spec-edge__labelwrap,
+.spec-edge__badgewrap,
+.spec-edge__viawrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Label pill: 11px text, max 140px, centred, up to 2 lines, on a small
+   dark pill (canvas colour ~92%, 1px faint border, radius 4) so the line
+   appears broken behind it. */
+.spec-edge__label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  max-width: var(--sp-edge-label-max);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  font-family: var(--sp-font-ui);
+  color: var(--sp-color-text-secondary);
+  background: color-mix(in srgb, var(--sp-color-bg-canvas) 92%, transparent);
+  backdrop-filter: blur(2px);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: auto;
+}
+
+.spec-edge--hi .spec-edge__label {
+  color: var(--sp-color-text-primary);
+}
+
+/* Optional second mono 10px meta line ("[rolled up]" / tech). */
+.spec-edge__label-meta {
+  display: block;
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--sp-color-text-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: var(--sp-edge-label-max);
+}
+
+/* Rolled-up count badge: 18px rounded square, dark fill, faint border. */
+.spec-edge__badge {
+  display: inline-block;
+  min-width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  line-height: 16px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--sp-font-ui);
+  color: var(--sp-color-text-primary);
+  background: var(--sp-color-bg-chrome);
+  border: 1px solid var(--sp-color-border-strong);
+  border-radius: 5px;
+  padding: 0 4px;
+  pointer-events: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Via pill (store/queue glyph + name) at the line midpoint. */
+.spec-edge__via {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-space-1);
+  max-width: var(--sp-edge-label-max);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sp-color-text-secondary);
+  background: color-mix(in srgb, var(--sp-color-bg-canvas) 92%, transparent);
+  backdrop-filter: blur(2px);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: auto;
+}
+
+.spec-edge__via-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spec-edge__via-glyph {
+  display: inline-flex;
+  flex: none;
+}
+
+/* Re-point handles on the selected edge (drag either end to another box). */
+.spec-edge__handle {
+  fill: var(--sp-color-bg-raised);
+  stroke: var(--sp-color-accent-primary);
+  stroke-width: 2px;
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+/* Draggable label pill: grab cursor, manual position always wins. */
+.spec-edge__label--drag {
+  cursor: grab;
+}

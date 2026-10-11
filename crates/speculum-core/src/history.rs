@@ -183,7 +183,7 @@ fn merge_key_for(cmd: &Command) -> Option<String> {
                 None
             }
         }
-        Command::PatchDiagram { id, name, description, order, pinned, domain_id, auto_placed } => {
+        Command::PatchDiagram { id, name, description, order, pinned, domain_id, auto_placed, show_all_labels } => {
             let mut count = 0;
             let mut field = "";
             if name.is_some() { count += 1; field = "name"; }
@@ -192,6 +192,7 @@ fn merge_key_for(cmd: &Command) -> Option<String> {
             if pinned.is_some() { count += 1; }
             if domain_id.is_some() { count += 1; }
             if auto_placed.is_some() { count += 1; }
+            if show_all_labels.is_some() { count += 1; }
             if count == 1 && (field == "name" || field == "description") {
                 Some(format!("patchDiagram:{id}:{field}"))
             } else {

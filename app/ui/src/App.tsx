@@ -119,6 +119,7 @@ function Shell() {
               connections: {},
               landing: {},
               autoPlaced: false,
+              showAllLabels: false,
               created: "",
               modified: "",
             },
@@ -178,15 +179,17 @@ function Shell() {
       {model.toast != null && (
         <div className="app-toast" role="status">
           <span>{model.toast}</span>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              clearToast();
-              void undoModel();
-            }}
-          >
-            Undo
-          </Button>
+          {model.toastUndo && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                clearToast();
+                void undoModel();
+              }}
+            >
+              Undo
+            </Button>
+          )}
         </div>
       )}
       {showRecovery && (

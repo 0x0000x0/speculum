@@ -115,3 +115,12 @@
   padding: var(--sp-space-1) var(--sp-space-2);
   cursor: pointer;
 }
+
+.quick-add__linking {
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
+  color: var(--sp-color-accent-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

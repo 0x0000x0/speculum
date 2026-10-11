@@ -1,0 +1,218 @@
+/* Floating breadcrumb card at the canvas top-left (spec 4.8): 12px inset,
+   40px tall, chrome background, 1px faint border, radius 8. Token vars only. */
+
+.crumb-card {
+  position: absolute;
+  top: var(--sp-space-3);
+  left: calc(var(--sp-layout-left-bar-width) + var(--sp-space-3));
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-2);
+  height: var(--sp-layout-toolbar-height);
+  max-width: min(560px, calc(100% - var(--sp-space-6) - 220px));
+  padding: 0 var(--sp-space-3);
+  background: var(--sp-color-bg-chrome);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-box);
+  box-shadow: var(--sp-shadow-l1);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-size);
+  font-weight: var(--sp-type-body-weight);
+  line-height: var(--sp-type-body-line);
+}
+
+.crumb-card__nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.crumb-card__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sp-color-text-secondary);
+  cursor: pointer;
+}
+
+.crumb-card__btn:hover:not(:disabled) {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.crumb-card__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.crumb-card__divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  background: var(--sp-color-border-subtle);
+}
+
+.crumb-card__crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.crumb-card__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-1);
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.crumb-card__item:last-child {
+  flex: 0 1 auto;
+}
+
+.crumb-card__crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-1);
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 2px var(--sp-space-1);
+  border-radius: var(--sp-radius-control);
+  white-space: nowrap;
+}
+
+.crumb-card__crumb--link {
+  color: var(--sp-color-text-secondary);
+  cursor: pointer;
+  max-width: 160px;
+}
+
+.crumb-card__crumb--link:hover {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.crumb-card__crumb--current {
+  color: var(--sp-color-text-primary);
+  max-width: 200px;
+}
+
+.crumb-card__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-card__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--sp-color-text-tertiary);
+}
+
+.crumb-card__crumb--current + * {
+  color: var(--sp-color-text-tertiary);
+}
+
+.crumb-card__sep {
+  color: var(--sp-color-text-tertiary);
+  flex: 0 0 auto;
+}
+
+.crumb-card__crumb--ellipsis {
+  color: var(--sp-color-text-secondary);
+  cursor: pointer;
+}
+
+.crumb-card__crumb--ellipsis:hover {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.crumb-card__menu-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.crumb-card__menu-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-1);
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: var(--sp-radius-control);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  padding: 2px var(--sp-space-2);
+  white-space: nowrap;
+}
+
+.crumb-card__menu-btn:hover {
+  background: var(--sp-color-bg-hover);
+  border-color: var(--sp-color-border-subtle);
+}
+
+.crumb-card__menu {
+  position: absolute;
+  top: calc(100% + var(--sp-space-1));
+  left: 0;
+  min-width: 220px;
+  z-index: 40;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-popover);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-2);
+}
+
+.crumb-card__menu-group + .crumb-card__menu-group {
+  margin-top: var(--sp-space-2);
+}
+
+.crumb-card__menu-title {
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sp-color-text-tertiary);
+  padding: 0 var(--sp-space-2) var(--sp-space-1);
+}
+
+.crumb-card__menu-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 0;
+  border-radius: var(--sp-radius-control);
+  background: transparent;
+  color: var(--sp-color-text-primary);
+  font-family: var(--sp-font-ui);
+  font-size: var(--sp-type-body-size);
+  padding: var(--sp-space-1) var(--sp-space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.crumb-card__menu-item:hover {
+  background: var(--sp-color-bg-hover);
+}
+
+.crumb-card__menu-item--current {
+  color: var(--sp-color-accent-primary);
+}

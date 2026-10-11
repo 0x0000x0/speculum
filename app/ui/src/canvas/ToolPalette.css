@@ -1,0 +1,239 @@
+/* IcePanel-style left tool palette (original look): slim vertical bar on
+   the LEFT edge of the canvas, full height, chrome bg + right border. */
+
+.tool-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--sp-layout-left-bar-width);
+  padding: var(--sp-space-2) 0;
+  gap: var(--sp-space-1);
+  /* Visible overflow: tooltips to the right must paint outside the bar. */
+  overflow: visible;
+  background: var(--sp-color-bg-chrome);
+  border-right: 1px solid var(--sp-color-border-subtle);
+}
+
+.tool-bar__group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-space-1);
+}
+
+.tool-bar__divider {
+  display: block;
+  width: var(--sp-space-6);
+  height: 1px;
+  margin: var(--sp-space-1) 0;
+  background: var(--sp-color-border-subtle);
+}
+
+.tool-bar__btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-layout-tool-hit);
+  height: var(--sp-layout-tool-hit);
+  border: 1px solid transparent;
+  border-radius: var(--sp-radius-control);
+  background: transparent;
+  color: var(--sp-color-text-secondary);
+  cursor: pointer;
+}
+
+.tool-bar__btn:hover {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.tool-bar__btn:focus-visible {
+  outline: 2px solid var(--sp-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.tool-bar__btn--active {
+  background: var(--sp-color-accent-primary);
+  color: var(--sp-color-accent-on);
+  border-color: var(--sp-color-accent-primary);
+  box-shadow: 0 0 0 1px var(--sp-color-focus-ring);
+}
+
+.tool-bar__glyph {
+  display: inline-flex;
+  width: var(--sp-layout-tool-glyph);
+  height: var(--sp-layout-tool-glyph);
+}
+
+.tool-bar__glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Tooltip to the right: name + shortcut, delayed ~ tooltip token. */
+.tool-bar__tip {
+  position: absolute;
+  left: calc(100% + var(--sp-space-2));
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-2);
+  white-space: nowrap;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-control);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-1) var(--sp-space-2);
+  font-size: var(--sp-type-body-sm-size);
+  color: var(--sp-color-text-primary);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--sp-motion-fast) var(--sp-motion-ease),
+    visibility 0s linear var(--sp-motion-tooltip-delay);
+  transition-delay: 0s, var(--sp-motion-tooltip-delay);
+  z-index: 30;
+}
+
+.tool-bar__btn:hover .tool-bar__tip,
+.tool-bar__btn:focus-visible .tool-bar__tip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: var(--sp-motion-tooltip-delay), var(--sp-motion-tooltip-delay);
+}
+
+.tool-bar__tip-key {
+  font-family: var(--sp-font-mono);
+  font-size: var(--sp-type-caption-size);
+  color: var(--sp-color-text-secondary);
+  background: var(--sp-color-bg-hover);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-control);
+  padding: 0 var(--sp-space-1);
+}
+
+/* Ghost box while an add-tool is placing. */
+.tool-ghost {
+  position: absolute;
+  z-index: 20;
+  width: var(--sp-box-wide-w);
+  height: var(--sp-box-wide-h);
+  box-sizing: border-box;
+  border: 1px dashed var(--sp-color-accent-primary);
+  border-radius: var(--sp-radius-box);
+  background: var(--sp-color-selection-fill);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sp-color-text-secondary);
+  font-size: var(--sp-type-body-sm-size);
+}
+
+/* Tool cursors on the canvas. */
+.flow-canvas--tool-select,
+.flow-canvas--tool-select .react-flow__pane {
+  cursor: default;
+}
+
+.flow-canvas--tool-pan,
+.flow-canvas--tool-pan .react-flow__pane {
+  cursor: grab;
+}
+
+.flow-canvas--tool-pan:active,
+.flow-canvas--tool-pan .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+.flow-canvas--tool-add,
+.flow-canvas--tool-add .react-flow__pane {
+  cursor: crosshair;
+}
+
+/* Floating zoom group: top-right, raised + popover radius + l1 shadow. */
+.zoom-group {
+  position: absolute;
+  top: var(--sp-space-2);
+  right: var(--sp-space-2);
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-0_5);
+  padding: var(--sp-space-0_5);
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-popover);
+  box-shadow: var(--sp-shadow-l1);
+}
+
+.zoom-group__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--sp-layout-tool-hit);
+  height: var(--sp-space-6);
+  padding: 0 var(--sp-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--sp-radius-control);
+  background: transparent;
+  color: var(--sp-color-text-secondary);
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.zoom-group__btn:hover {
+  background: var(--sp-color-bg-hover);
+  color: var(--sp-color-text-primary);
+}
+
+.zoom-group__btn:focus-visible {
+  outline: 2px solid var(--sp-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.zoom-group__tip {
+  position: absolute;
+  top: calc(100% + var(--sp-space-2));
+  right: 0;
+  white-space: nowrap;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-control);
+  box-shadow: var(--sp-shadow-l2);
+  padding: var(--sp-space-1) var(--sp-space-2);
+  font-size: var(--sp-type-body-sm-size);
+  color: var(--sp-color-text-primary);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--sp-motion-fast) var(--sp-motion-ease),
+    visibility 0s linear var(--sp-motion-tooltip-delay);
+  transition-delay: 0s, var(--sp-motion-tooltip-delay);
+  z-index: 30;
+}
+
+.zoom-group__btn:hover .zoom-group__tip,
+.zoom-group__btn:focus-visible .zoom-group__tip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: var(--sp-motion-tooltip-delay), var(--sp-motion-tooltip-delay);
+}
+
+.zoom-group__tip-key {
+  font-family: var(--sp-font-mono);
+  font-size: var(--sp-type-caption-size);
+  color: var(--sp-color-text-secondary);
+}

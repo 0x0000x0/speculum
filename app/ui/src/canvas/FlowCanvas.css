@@ -64,37 +64,162 @@
   }
 }
 
-/* Drill snapshot overlay: a box clone that grows (drill-in) or shrinks
-   (drill-up) via transform + opacity only. Never blocks input. */
-.drill-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
+/* Drill camera transition (spec 4.7): the camera (setCenter) does the
+   moving; CSS only fades non-targets, morphs the tray, and staggers
+   children in. Input is ignored while .flow-canvas--anim runs. */
+.flow-canvas--anim .react-flow__viewport,
+.flow-canvas--anim .react-flow__pane,
+.flow-canvas--anim .crumb-card {
   pointer-events: none;
-  transform-origin: 0 0;
-  background: var(--sp-color-bg-raised);
-  border: 1px solid var(--sp-color-accent-primary);
-  border-radius: var(--sp-radius-box);
-  box-shadow: var(--sp-shadow-l3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform var(--sp-motion-drill) var(--sp-motion-ease);
 }
 
-.drill-overlay--up {
-  transition: transform var(--sp-motion-base) var(--sp-motion-ease);
+/* Non-target boxes/links fade out while the camera zooms (opacity .2s). */
+.flow-canvas--zooming .react-flow__edge {
+  opacity: 0;
 }
 
-.drill-overlay__label {
-  font-size: var(--sp-type-drill-header-size);
-  font-weight: var(--sp-type-drill-header-weight);
-  line-height: var(--sp-type-drill-header-line);
-  color: var(--sp-color-text-primary);
-  padding: 0 var(--sp-space-6);
+.flow-canvas .spec-node--drill-fade {
+  opacity: 0;
+}
+
+/* Swap: the box visibly becomes the tray (fill/border morph ~200ms). */
+.flow-canvas--swap [data-testid="scope-frame"] {
+  animation: spec-tray-in var(--sp-motion-base) var(--sp-motion-ease) both;
+}
+
+@keyframes spec-tray-in {
+  from {
+    background: var(--sp-color-box-fill);
+    border-color: var(--sp-color-box-border);
+  }
+  to {
+    background: var(--sp-color-frame-fill);
+    border-color: var(--sp-color-frame-border-focus);
+  }
+}
+
+/* Swap: children fade + scale in (0.96 -> 1, 180ms, 12ms stagger set
+   inline per node by the canvas). */
+.flow-canvas--swap .react-flow__node:not(.spec-frame-node) {
+  animation: spec-child-in 180ms var(--sp-motion-ease) both;
+}
+
+@keyframes spec-child-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* Context trays (spec 4.6): faint frames outside the main tray. */
+.flow-canvas .react-flow__node.ctx-tray-node {
+  pointer-events: none;
+}
+
+.ctx-tray {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--sp-color-frame-fill-ctx);
+  border: 1px solid var(--sp-color-frame-border);
+  border-radius: 12px;
+  padding: var(--sp-space-2) var(--sp-ctx-pad);
+}
+
+.ctx-tray__label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-family: var(--sp-font-ui);
+  color: var(--sp-color-text-secondary);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ctx-tray__sub {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--sp-color-text-meta);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tray children: small dimmed boxes (0.25), full on hover/related. */
+.ctx-child-node {
+  opacity: var(--sp-dim-unrelated);
+  transition: opacity var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.ctx-child-node:hover,
+.ctx-child-node.spec-node--ctx-hot {
+  opacity: 1;
+}
+
+.ctx-child {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--sp-color-box-fill);
+  border: 1px solid var(--sp-color-box-border);
+  border-radius: 10px;
+  box-shadow: none;
+  padding: 8px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  cursor: pointer;
+  font-family: var(--sp-font-ui);
+}
+
+.ctx-child:hover {
+  border-color: var(--sp-color-accent-primary);
+}
+
+.ctx-child__icon {
+  display: inline-flex;
+  color: var(--sp-color-text-secondary);
+  flex: 0 0 auto;
+}
+
+.ctx-child__title {
+  width: 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--sp-color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ctx-child__kind {
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--sp-color-text-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* Scope frame: a large labelled container behind all boxes (not a model
@@ -103,24 +228,171 @@
   pointer-events: none;
 }
 
+/* Explicit frame-node class (the :has rule above is a fallback): the
+   wrapper never eats pointer events, so edges can't bury the parent
+   port and pane gestures pass through the frame body. */
+.flow-canvas .react-flow__node.spec-frame-node {
+  /* !important: React Flow sets pointer-events inline on the wrapper. */
+  pointer-events: none !important;
+  z-index: 0;
+}
+
+.flow-canvas .react-flow__node.spec-frame-node .scope-frame__port--source {
+  position: absolute;
+  z-index: 5;
+}
+
+/* Scope tray: a filled container lighter than the canvas (spec 4.2).
+   Current scope = focused: 1px solid focus border, never dashed. */
 .scope-frame {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  border: 1px dashed var(--sp-color-border-strong);
-  border-radius: var(--sp-radius-popover);
-  background: transparent;
-  padding: var(--sp-space-3) var(--sp-space-4);
+  background: var(--sp-color-frame-fill);
+  border: 1px solid var(--sp-color-frame-border-focus);
+  border-radius: 12px;
+  padding: 16px 20px;
 }
 
+/* Label sits INSIDE the tray top-left: 16px/600 primary title … */
 .scope-frame__label {
-  display: inline-block;
-  font-size: var(--sp-type-title-size);
-  font-weight: var(--sp-type-title-weight);
-  line-height: var(--sp-type-title-line);
-  color: var(--sp-color-text-tertiary);
+  display: block;
+  background: none;
+  padding: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-family: var(--sp-font-ui);
+  color: var(--sp-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* … with a mono 11px meta line below: "<Kind> | <caption>". */
+.scope-frame__sub {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--sp-color-text-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Parent port: hidden until the frame is hovered or a connection is
+   being made (spec G13). Geometry in edgeGeometry.parentPortOf. */
+.scope-frame__port {
+  position: absolute;
+  top: calc(var(--sp-edge-port) / -2);
+  left: var(--sp-space-6);
+  width: var(--sp-edge-port);
+  height: var(--sp-edge-port);
+  border-radius: var(--sp-radius-pill);
   background: var(--sp-color-bg-canvas);
-  padding: 0 var(--sp-space-2);
+  border: 1px solid var(--sp-color-accent-primary);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.flow-canvas--connect .scope-frame__port,
+.scope-frame:hover .scope-frame__port {
+  opacity: 1;
+}
+
+/* Connect-mode cursor + live drag preview (dashed line + arrowhead). */
+.flow-canvas--connect,
+.flow-canvas--connect .react-flow__pane {
+  cursor: crosshair;
+}
+
+.connect-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.connect-preview__svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.connect-preview__line {
+  stroke: var(--sp-color-accent-primary);
+  stroke-width: var(--sp-edge-stroke-hi);
+  stroke-dasharray: 6 4;
+}
+
+.connect-preview__arrow {
+  fill: var(--sp-color-accent-primary);
+}
+
+/* Parent port accepts drags (source for parent->child, target for child->parent).
+   It stays a live drag target while visually hidden (opacity 0). */
+.scope-frame__port--source {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.canvas-toolbar {
+  position: absolute;
+  top: var(--sp-space-3);
+  right: var(--sp-space-3);
+  z-index: 5;
+  display: flex;
+  gap: var(--sp-space-2);
+}
+
+/* Labels toggle sits below the zoom group (both top-right, no overlap). */
+.canvas-toolbar--labels {
+  top: calc(var(--sp-space-2) + var(--sp-space-10));
+  right: var(--sp-space-2);
+}
+
+.canvas-toolbar__group {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-pill);
+}
+
+.canvas-toolbar__group .canvas-toolbar__btn {
+  border-color: transparent;
+  background: transparent;
+}
+
+.canvas-toolbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  font-size: var(--sp-type-caption-size);
+  font-weight: var(--sp-type-caption-weight);
+  color: var(--sp-color-text-secondary);
+  background: var(--sp-color-bg-raised);
+  border: 1px solid var(--sp-color-border-subtle);
+  border-radius: var(--sp-radius-pill);
+  padding: var(--sp-space-1) var(--sp-space-3);
+  cursor: pointer;
+}
+
+.canvas-toolbar__btn--icon {
+  min-width: 0;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+}
+
+.canvas-toolbar__btn--on {
+  color: var(--sp-color-accent-on);
+  background: var(--sp-color-accent-primary);
+  border-color: var(--sp-color-accent-primary);
 }
 
 /* Invisible edge anchors on the scope frame (boundary edges attach here). */
@@ -213,17 +485,11 @@
   stroke: var(--sp-color-accent-secondary);
 }
 
-/* --- animated dash flow on highlighted edges --- */
+/* --- highlighted RF edges stay solid (no marching ants) --- */
 
 .flow-canvas .flow-edge--hi .react-flow__edge-path {
-  stroke-dasharray: 6 6;
-  animation: spec-flow calc(var(--sp-motion-drill) * 4) linear infinite;
-}
-
-@keyframes spec-flow {
-  to {
-    stroke-dashoffset: -24;
-  }
+  stroke-dasharray: none;
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -234,5 +500,10 @@
   .flow-canvas .react-flow__node,
   .flow-canvas .react-flow__edge {
     transition: none;
+  }
+
+  .flow-canvas--swap [data-testid="scope-frame"],
+  .flow-canvas--swap .react-flow__node:not(.spec-frame-node) {
+    animation: none;
   }
 }

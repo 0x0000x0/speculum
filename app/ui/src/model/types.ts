@@ -115,6 +115,7 @@ export interface SpecDiagram {
   viewport?: Viewport | null;
   landing: Record<string, string>;
   autoPlaced: boolean;
+  showAllLabels: boolean;
   created: string;
   modified: string;
 }
@@ -178,6 +179,21 @@ export interface ScopeInfo {
   kind: ObjectKind;
 }
 
+export interface ContextTrayChild {
+  objectId: string;
+  name: string;
+  kind: ObjectKind;
+}
+
+export interface ContextTray {
+  objectId: string;
+  name: string;
+  kind: ObjectKind;
+  caption: string;
+  side: string;
+  children: ContextTrayChild[];
+}
+
 export interface DiagramView {
   diagram: SpecDiagram;
   objects: SpecObject[];
@@ -185,6 +201,7 @@ export interface DiagramView {
   edges: ViewEdge[];
   breadcrumb: BreadcrumbItem[];
   scope?: ScopeInfo | null;
+  contextTrays: ContextTray[];
 }
 
 export interface ZoomIntoResult {
@@ -214,11 +231,19 @@ export type Command =
       order?: number;
       pinned?: boolean;
       autoPlaced?: boolean;
+      showAllLabels?: boolean;
     }
   | { op: "addToDiagram"; diagramId: string; objectId: string; rect: Rect }
   | { op: "removeFromDiagram"; diagramId: string; objectId: string }
   | { op: "moveBoxes"; diagramId: string; moves: Record<string, Rect> }
   | { op: "applyLayout"; diagramId: string; boxes: Record<string, Rect> }
+  | {
+      op: "showConnection";
+      diagramId: string;
+      connectionId: string;
+      layout: EdgeLayout;
+    }
+  | { op: "hideConnection"; diagramId: string; connectionId: string }
   | { op: "setViewport"; diagramId: string; viewport?: Viewport | null }
   | { op: "setLanding"; diagramId: string; objectId: string; target?: string | null }
   | { op: "batch"; commands: Command[] };

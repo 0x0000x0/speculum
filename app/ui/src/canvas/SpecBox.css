@@ -1,4 +1,5 @@
-/* SpecBox node: per-kind box styling. Token variables only. */
+/* SpecBox node: square 120 anatomy (spec 4.3) + wide 220x110 variant.
+   Token variables only. */
 
 .spec-box {
   position: relative;
@@ -6,213 +7,142 @@
   height: 100%;
   box-sizing: border-box;
   overflow: hidden;
-  background: var(--sp-color-bg-raised);
-  border: 1px solid var(--sp-color-border-strong);
-  border-radius: var(--sp-radius-box);
-  padding: var(--sp-space-3) var(--sp-space-4);
-  box-shadow: var(--sp-shadow-l1);
+  background: var(--sp-color-box-fill);
+  border: 1px solid var(--sp-color-box-border);
+  border-radius: 10px;
+  box-shadow: none;
+  padding: 8px 10px 8px;
+  display: grid;
+  grid-template-rows: 18px 1fr auto;
+  justify-items: center;
+  text-align: center;
   transition:
     border-color var(--sp-motion-fast) var(--sp-motion-ease),
     box-shadow var(--sp-motion-fast) var(--sp-motion-ease),
     opacity var(--sp-motion-fast) var(--sp-motion-ease);
 }
 
-/* --- kind cues --- */
-
-.spec-box--kind-actor {
-  border-radius: var(--sp-radius-popover);
+/* Wide landscape variant: caption + [Kind: tech] footer. */
+.spec-box--wide {
+  grid-template-rows: 18px 1fr auto auto auto;
 }
 
-.spec-box--kind-system {
-  padding-top: var(--sp-space-4);
-}
+/* --- retired kind cues (icons do the work) --- */
 
-.spec-box__accent-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--sp-color-accent-primary);
-  border-top-left-radius: var(--sp-radius-box);
-  border-top-right-radius: var(--sp-radius-box);
-}
-
-.spec-box--kind-group {
-  background: transparent;
-  border-style: dashed;
-  border-width: 1.5px;
-  box-shadow: none;
-}
-
+.spec-box__accent-bar,
 .spec-box__tab {
-  position: absolute;
-  top: calc(-1 * var(--sp-space-1));
-  left: var(--sp-space-3);
-  transform: translateY(-100%);
-  display: inline-flex;
-  align-items: center;
-  padding: 0 var(--sp-space-2);
-  height: 20px;
-  background: var(--sp-color-bg-chrome);
-  border: 1px solid var(--sp-color-border-strong);
-  border-bottom: 0;
-  border-top-left-radius: var(--sp-radius-control);
-  border-top-right-radius: var(--sp-radius-control);
-  color: var(--sp-color-text-tertiary);
-}
-
-.spec-box__tab-glyph {
-  display: inline-flex;
-}
-
-.spec-box--kind-store {
-  border-bottom-left-radius: var(--sp-radius-popover);
-  border-bottom-right-radius: var(--sp-radius-popover);
+  display: none;
 }
 
 .spec-box--kind-component {
-  clip-path: polygon(
-    0 0,
-    calc(100% - 18px) 0,
-    100% 18px,
-    100% 100%,
-    0 100%
-  );
+  clip-path: none;
+}
+
+.spec-box--kind-actor,
+.spec-box--kind-system,
+.spec-box--kind-group,
+.spec-box--kind-app,
+.spec-box--kind-store {
+  clip-path: none;
+}
+
+.spec-box--kind-group {
+  background: var(--sp-color-box-fill);
+  border-style: solid;
+  border-width: 1px;
+  box-shadow: none;
+}
+
+.spec-box__tab--retired {
+  display: none;
 }
 
 .spec-box--external {
-  border-style: dashed;
+  background: var(--sp-color-box-fill-external);
+  border-style: solid;
 }
 
-.spec-box__external-chip {
-  display: inline-block;
-  margin-top: var(--sp-space-1);
-  padding: 0 var(--sp-space-2);
-  height: 18px;
-  line-height: 18px;
-  border: 1px dashed var(--sp-color-border-strong);
-  border-radius: var(--sp-radius-pill);
-  color: var(--sp-color-text-tertiary);
-  font-size: var(--sp-type-caption-size);
-  font-weight: var(--sp-type-caption-weight);
+/* Tags: a 3px coloured left edge strip using the first tag colour. */
+.spec-box__tagstrip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-top-left-radius: 9px;
+  border-bottom-left-radius: 9px;
+  pointer-events: none;
 }
 
-/* --- status --- */
-
-.spec-box__status {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 var(--sp-space-2);
-  border-radius: var(--sp-radius-pill);
-  font-size: var(--sp-type-caption-size);
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.spec-box__status--future {
-  background: var(--sp-color-state-info);
-  color: var(--sp-color-accent-on);
-}
-
-.spec-box__status--deprecated {
-  background: var(--sp-color-state-warning);
-  color: var(--sp-color-accent-on);
-}
-
-.spec-box__status--removed {
-  background: var(--sp-color-state-danger);
-  color: var(--sp-color-accent-on);
-}
-
-.spec-box--status-removed {
+/* Store: subtle cylinder top line. */
+.spec-box--kind-store::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 22px;
+  right: 22px;
+  height: 5px;
+  border: 1px solid var(--sp-color-box-border);
+  border-bottom: 0;
+  border-radius: 50%;
   opacity: 0.6;
+  pointer-events: none;
 }
 
-/* --- header / content --- */
+/* --- top row: expand glyph + count left, 6px status dot right --- */
 
 .spec-box__top {
+  justify-self: stretch;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-space-2);
-  margin-bottom: var(--sp-space-1);
+  min-height: 18px;
 }
 
-.spec-box__kind {
+.spec-box__drill-slot {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-space-1);
-  font-size: var(--sp-type-caption-size);
-  font-weight: var(--sp-type-caption-weight);
-  line-height: var(--sp-type-caption-line);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--sp-color-text-tertiary);
-  min-width: 0;
-}
-
-.spec-box__glyph {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.spec-box__top-right {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-space-1);
-  flex: 0 0 auto;
+  min-width: 18px;
+  min-height: 18px;
 }
 
 .spec-box__drill {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   min-width: 18px;
   height: 18px;
   padding: 0 var(--sp-space-1);
-  border: 1px solid var(--sp-color-border-strong);
-  border-radius: var(--sp-radius-pill);
-  background: var(--sp-color-bg-chrome);
+  border: 0;
+  border-radius: var(--sp-radius-control);
+  background: transparent;
   color: var(--sp-color-text-secondary);
-  font-family: var(--sp-font-mono);
-  font-size: var(--sp-type-caption-size);
+  font-family: var(--sp-font-ui);
+  font-size: 11px;
+  font-weight: 500;
   line-height: 1;
   cursor: pointer;
-  transition:
-    color var(--sp-motion-fast) var(--sp-motion-ease),
-    border-color var(--sp-motion-fast) var(--sp-motion-ease),
-    opacity var(--sp-motion-fast) var(--sp-motion-ease);
 }
 
 .spec-box__drill:hover {
   color: var(--sp-color-accent-primary);
-  border-color: var(--sp-color-accent-primary);
 }
 
 .spec-box__drill-glyph {
   display: inline-flex;
 }
 
-/* Zoomable without children: faint until the box is hovered/focused. */
-.spec-box__drill--faint {
-  opacity: 0;
-}
-
-.spec-box:hover .spec-box__drill--faint,
-.spec-box:focus-within .spec-box__drill--faint {
-  opacity: 0.75;
-}
-
-.spec-box__drill--faint:hover {
-  opacity: 1;
+.spec-box__drill-count {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Delayed tooltip ("Open inside" after 500 ms), token-driven. */
+.spec-box__drill {
+  position: relative;
+}
+
 .spec-box__drill::after {
   content: "Open inside";
   position: absolute;
@@ -247,45 +177,118 @@
   }
 }
 
-.spec-box__title {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  font-size: var(--sp-type-title-sm-size);
-  font-weight: var(--sp-type-title-sm-weight);
-  line-height: var(--sp-type-title-sm-line);
-  color: var(--sp-color-text-primary);
-  overflow-wrap: anywhere;
+/* 6px status dot: green for live, muted colours otherwise. */
+.spec-box__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--sp-radius-pill);
+  background: var(--sp-color-state-success);
 }
 
-.spec-box__caption {
+.spec-box__dot--future {
+  background: var(--sp-color-state-info);
+}
+
+.spec-box__dot--deprecated {
+  background: var(--sp-color-state-warning);
+}
+
+.spec-box__dot--removed {
+  background: var(--sp-color-state-danger);
+}
+
+/* --- centre: kind icon above centred name --- */
+
+.spec-box__center {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  color: var(--sp-color-text-secondary);
+}
+
+.spec-box__icon {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 6px;
+  flex: 0 0 auto;
+}
+
+.spec-box__title {
+  align-self: center;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.25;
+  font-family: var(--sp-font-ui);
+  color: var(--sp-color-text-primary);
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+/* --- bottom-centre: mono kind line, not uppercase --- */
+
+.spec-box__kind {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sp-color-text-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Wide variant: 1-line caption + mono [Kind: tech] footer. */
+.spec-box__caption {
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin-top: 2px;
   font-size: var(--sp-type-body-sm-size);
   font-weight: var(--sp-type-body-sm-weight);
   line-height: var(--sp-type-body-sm-line);
   color: var(--sp-color-text-secondary);
-  overflow-wrap: anywhere;
+  text-align: center;
 }
 
-.spec-box__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-space-1);
-  margin-top: var(--sp-space-2);
+.spec-box__tech {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--sp-color-text-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .spec-box__rename {
   width: 100%;
   box-sizing: border-box;
-  font-size: var(--sp-type-title-sm-size);
-  font-weight: var(--sp-type-title-sm-weight);
-  line-height: var(--sp-type-title-sm-line);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.25;
   font-family: var(--sp-font-ui);
+  text-align: center;
   color: var(--sp-color-text-primary);
   background: var(--sp-color-bg-chrome);
   border: 1px solid var(--sp-color-focus-ring);
@@ -298,12 +301,6 @@
 
 .react-flow__node.selected .spec-box {
   border: 1.5px solid var(--sp-color-accent-primary);
-  background-color: color-mix(
-    in srgb,
-    var(--sp-color-accent-primary) 12%,
-    var(--sp-color-bg-raised)
-  );
-  box-shadow: var(--sp-shadow-l2);
 }
 
 .react-flow__node.selected .spec-box--kind-group {
@@ -318,6 +315,12 @@
 
 .spec-box--mid .spec-box__title {
   -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.spec-box--mid .spec-box__icon {
+  width: 22px;
+  height: 22px;
 }
 
 .spec-box--far {
@@ -325,6 +328,7 @@
   border: 0;
   border-radius: var(--sp-radius-control);
   box-shadow: none;
+  display: block;
 }
 
 .spec-box--kind-actor.spec-box--far { background: var(--sp-color-accent-secondary); }
@@ -343,4 +347,78 @@
   min-height: 1px;
   border: 0;
   pointer-events: none;
+}
+
+/* Connection handles: at most one small dot per side (4 total), faint
+   accent outline. Always rendered but only visible on hover / selection /
+   connect mode, so showing them never rebuilds the canvas. */
+.spec-dots {
+  position: absolute;
+  inset: -7px;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--sp-motion-fast) var(--sp-motion-ease),
+    visibility var(--sp-motion-fast) var(--sp-motion-ease);
+}
+
+.react-flow__node:hover .spec-dots,
+.react-flow__node.selected .spec-dots,
+.flow-canvas--connect .spec-dots {
+  opacity: 1;
+  visibility: visible;
+}
+
+.spec-dots__dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--sp-radius-pill);
+  background: transparent;
+  border: 1px solid var(--sp-color-accent-primary);
+  opacity: 0.55;
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.spec-dots__dot:hover {
+  opacity: 1;
+  background: var(--sp-color-accent-primary);
+}
+
+/* Keyboard connect-mode target candidate ring. */
+.spec-box--candidate {
+  outline: 2px dashed var(--sp-color-accent-secondary);
+  outline-offset: 3px;
+}
+
+/* Wide variant must fit 110px without the name running into the caption:
+   smaller icon, one-line name, and the plain kind line is dropped because
+   the [Kind: tech] footer already says it. */
+.spec-box--wide {
+  padding: 6px 10px;
+  grid-template-rows: 14px minmax(0, 1fr) auto auto;
+}
+
+.spec-box--wide .spec-box__kind {
+  display: none;
+}
+
+.spec-box--wide .spec-box__icon,
+.spec-box--wide .spec-box__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.spec-box--wide .spec-box__icon {
+  margin-bottom: 2px;
+}
+
+.spec-box--wide .spec-box__title {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  font-size: 16px;
 }

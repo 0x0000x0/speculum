@@ -66,6 +66,28 @@ function buildCss() {
   independent.push(`  --sp-layout-side-panel-max: ${L.sidePanelMax}px;`);
   independent.push(`  --sp-layout-status-bar-height: ${L.statusBarHeight}px;`);
   independent.push(`  --sp-layout-canvas-padding: ${L.canvasPadding}px;`);
+  if (L.boxS !== undefined) independent.push(`  --sp-box-s: ${L.boxS}px;`);
+  if (L.boxWideW !== undefined) independent.push(`  --sp-box-wide-w: ${L.boxWideW}px;`);
+  if (L.boxWideH !== undefined) independent.push(`  --sp-box-wide-h: ${L.boxWideH}px;`);
+  if (L.cell !== undefined) independent.push(`  --sp-cell: ${L.cell}px;`);
+  if (L.gap !== undefined) independent.push(`  --sp-gap: ${L.gap}px;`);
+  if (L.gapLabelRow !== undefined) independent.push(`  --sp-gap-label-row: ${L.gapLabelRow}px;`);
+  if (L.framePad !== undefined) {
+    independent.push(`  --sp-frame-pad: ${L.framePad}px;`);
+    independent.push(`  --sp-layout-frame-pad: ${L.framePad}px;`);
+  }
+  if (L.frameHeader !== undefined) {
+    independent.push(`  --sp-frame-header: ${L.frameHeader}px;`);
+    independent.push(`  --sp-layout-frame-header: ${L.frameHeader}px;`);
+  }
+  if (L.ctxChildS !== undefined) independent.push(`  --sp-ctx-child: ${L.ctxChildS}px;`);
+  if (L.ctxGap !== undefined) independent.push(`  --sp-ctx-gap: ${L.ctxGap}px;`);
+  if (L.ctxPad !== undefined) independent.push(`  --sp-ctx-pad: ${L.ctxPad}px;`);
+  if (L.ctxHeader !== undefined) independent.push(`  --sp-ctx-header: ${L.ctxHeader}px;`);
+  if (L.ctxTrayGap !== undefined) independent.push(`  --sp-ctx-tray-gap: ${L.ctxTrayGap}px;`);
+  if (L.leftBarWidth !== undefined) independent.push(`  --sp-layout-left-bar-width: ${L.leftBarWidth}px;`);
+  if (L.toolHit !== undefined) independent.push(`  --sp-layout-tool-hit: ${L.toolHit}px;`);
+  if (L.toolGlyph !== undefined) independent.push(`  --sp-layout-tool-glyph: ${L.toolGlyph}px;`);
   for (const [name, t] of Object.entries(tokens.type)) {
     independent.push(`  --sp-type-${name}-size: ${t.size}px;`);
     independent.push(`  --sp-type-${name}-weight: ${t.weight};`);
@@ -84,6 +106,18 @@ function buildCss() {
   }
   independent.push(`  --sp-motion-ease: ${tokens.motion.ease};`);
   independent.push(`  --sp-dim-unrelated: ${tokens.color.dim.unrelatedOpacity};`);
+  if (tokens.edge) {
+    const E = tokens.edge;
+    const px = (v) => (typeof v === "number" ? `${v}px` : v);
+    if (E.stroke !== undefined) independent.push(`  --sp-edge-stroke: ${px(E.stroke)};`);
+    if (E.strokeHi !== undefined) independent.push(`  --sp-edge-stroke-hi: ${px(E.strokeHi)};`);
+    if (E.cornerRadius !== undefined) independent.push(`  --sp-edge-corner: ${px(E.cornerRadius)};`);
+    if (E.labelMaxWidth !== undefined) independent.push(`  --sp-edge-label-max: ${px(E.labelMaxWidth)};`);
+    if (E.portSize !== undefined) independent.push(`  --sp-edge-port: ${px(E.portSize)};`);
+    if (E.framePadding !== undefined) independent.push(`  --sp-edge-frame-pad: ${px(E.framePadding)};`);
+    if (E.arrowMin !== undefined) independent.push(`  --sp-edge-arrow-min: ${px(E.arrowMin)};`);
+    if (E.fanStep !== undefined) independent.push(`  --sp-edge-fan-step: ${px(E.fanStep)};`);
+  }
 
   return (
     `/* GENERATED — do not edit by hand. Source: tokens/tokens.json.\n` +
@@ -123,6 +157,14 @@ function rsTagsBlock(theme) {
 }
 
 function buildRs() {
+  const layoutConsts = tokens.layout
+    ? Object.entries(tokens.layout)
+        .map(
+          ([k, v]) =>
+            `    pub const ${k.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase()}: u32 = ${v};`,
+        )
+        .join("\n")
+    : "";
   const spacing = Object.entries(tokens.spacing)
     .map(([k, v]) => `    pub const ${rsSpaceConstName(k)}: u32 = ${v};`)
     .join("\n");
@@ -153,6 +195,8 @@ function buildRs() {
     `pub mod light {\n${rsThemeBlock("light")}\n\n` +
     `    /// Tag palette for the \`light\` theme.\n` +
     `    pub mod tags {\n${rsTagsBlock("light")}\n    }\n}\n\n` +
+    `/// Layout constants in logical pixels (packing + frame geometry).\n` +
+    `pub mod layout {\n${layoutConsts}\n}\n\n` +
     `/// Spacing scale in logical pixels.\n` +
     `pub mod spacing {\n${spacing}\n}\n\n` +
     `/// Corner radii in logical pixels (\`PILL\` is effectively fully rounded).\n` +

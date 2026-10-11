@@ -317,6 +317,7 @@ struct DiagramViewDto {
     edges: Vec<speculum_core::ViewEdge>,
     breadcrumb: Vec<BreadcrumbItem>,
     scope: Option<ScopeDto>,
+    context_trays: Vec<speculum_core::ContextTray>,
 }
 
 #[derive(serde::Serialize)]
@@ -431,6 +432,7 @@ fn get_diagram_view(
         edges,
         breadcrumb,
         scope,
+        context_trays: speculum_core::context_trays(doc, &diagram_id),
     })
 }
 
@@ -521,6 +523,7 @@ fn ensure_layout(
                             pinned: None,
                             domain_id: None,
                             auto_placed: Some(true),
+                            show_all_labels: None,
                         },
                     ],
                 },

@@ -158,31 +158,31 @@ await page
 await page.waitForFunction(
   () =>
     document.querySelector('[data-testid="status-counts"]')?.textContent
-      ?.includes("14 objects"),
+      ?.includes("15 objects"),
   { timeout: 15000 },
 );
 const countsText = await page.getByTestId("status-counts").textContent();
 ok(
-  "status counts show sample (14 objects, 9 links)",
-  (countsText ?? "").includes("14 objects") &&
-    (countsText ?? "").includes("9 links"),
+  "status counts show sample (15 objects, 15 links)",
+  (countsText ?? "").includes("15 objects") &&
+    (countsText ?? "").includes("15 links"),
   countsText ?? "",
 );
 const pObjs = await page.getByTestId("panel-count-objects").textContent();
 const pLinks = await page.getByTestId("panel-count-links").textContent();
 const pFlows = await page.getByTestId("panel-count-flows").textContent();
 ok(
-  "side panel shows sample counts 14/9/0",
-  (pObjs ?? "").trim() === "14" &&
-    (pLinks ?? "").trim() === "9" &&
+  "side panel shows sample counts 15/15/0",
+  (pObjs ?? "").trim() === "15" &&
+    (pLinks ?? "").trim() === "15" &&
     (pFlows ?? "").trim() === "0",
   `objects=${pObjs} links=${pLinks} flows=${pFlows}`,
 );
 const stCounts = await page.evaluate(() => window.__speculum.getState());
 ok(
   "debug counts match panel",
-  stCounts.counts?.objects === 14 &&
-    stCounts.counts?.links === 9 &&
+  stCounts.counts?.objects === 15 &&
+    stCounts.counts?.links === 15 &&
     stCounts.counts?.flows === 0,
   JSON.stringify(stCounts.counts),
 );
@@ -223,10 +223,15 @@ ok(
     const size = 12;
     // Bottom-right is shifted left to stay clear of the React Flow
     // attribution badge (which must remain visible).
+    // Clips stay clear of canvas chrome: the M6 left tool bar (44px),
+    // the breadcrumb card (top-left), and the zoom/labels groups
+    // (top-right). They still sample the painted canvas background.
+    const leftX = canvasBox.x + 44 + inset;
+    const topY = canvasBox.y + 90;
     const clips = [
-      { x: canvasBox.x + inset, y: canvasBox.y + inset, width: size, height: size },
-      { x: canvasBox.x + canvasBox.width - inset - size, y: canvasBox.y + inset, width: size, height: size },
-      { x: canvasBox.x + inset, y: canvasBox.y + canvasBox.height - inset - size, width: size, height: size },
+      { x: leftX, y: topY, width: size, height: size },
+      { x: canvasBox.x + canvasBox.width - inset - size, y: topY, width: size, height: size },
+      { x: leftX, y: canvasBox.y + canvasBox.height - inset - size, width: size, height: size },
       { x: canvasBox.x + canvasBox.width - inset - size - 140, y: canvasBox.y + canvasBox.height - inset - size, width: size, height: size },
     ];
     const avgs = [];

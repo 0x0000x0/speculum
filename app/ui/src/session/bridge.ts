@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   emptyDocument,
   type Command,
+  type ContextTray,
   type DiagramInfo,
   type DiagramView,
   type Rect,
@@ -319,6 +320,7 @@ function applyCommand(doc: SpecDocument, cmd: Command): void {
       if (cmd.order !== undefined) d.order = cmd.order;
       if (cmd.pinned !== undefined) d.pinned = cmd.pinned;
       if (cmd.autoPlaced !== undefined) d.autoPlaced = cmd.autoPlaced;
+      if (cmd.showAllLabels !== undefined) d.showAllLabels = cmd.showAllLabels;
       return;
     }
     case "addToDiagram": {
@@ -354,6 +356,21 @@ function applyCommand(doc: SpecDocument, cmd: Command): void {
       const d = doc.diagrams[cmd.diagramId];
       if (!d) fail(`not found: ${cmd.diagramId}`);
       d.boxes = { ...cmd.boxes };
+      return;
+    }
+    case "showConnection": {
+      const d = doc.diagrams[cmd.diagramId];
+      if (!d) fail(`not found: ${cmd.diagramId}`);
+      if (!doc.model.connections[cmd.connectionId])
+        fail(`not found: ${cmd.connectionId}`);
+      d.connections[cmd.connectionId] = { ...cmd.layout };
+      return;
+    }
+    case "hideConnection": {
+      const d = doc.diagrams[cmd.diagramId];
+      if (!d) fail(`not found: ${cmd.diagramId}`);
+      if (!d.connections[cmd.connectionId]) fail(`not found: ${cmd.connectionId}`);
+      delete d.connections[cmd.connectionId];
       return;
     }
     case "setViewport": {
@@ -482,6 +499,80 @@ function mockDiagramEdges(doc: SpecDocument, diagramId: string): ViewEdge[] {
   );
 }
 
+// --- context trays (mirrors speculum-core context::context_trays EXACTLY) ---
+
+function subtreeOf(doc: SpecDocument, root: string): Set<string> {
+  const seen = new Set<string>([root]);
+  const stack = [root];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    for (const o of Object.values(doc.model.objects)) {
+      if ((o.parentId ?? null) === cur && !seen.has(o.id)) {
+        seen.add(o.id);
+        stack.push(o.id);
+      }
+    }
+  }
+  return seen;
+}
+
+function mockContextTrays(doc: SpecDocument, diagramId: string): ContextTray[] {
+  const d = doc.diagrams[diagramId];
+  if (!d) return [];
+  const scopeId = d.scopeObjectId ?? null;
+  if (scopeId == null) return [];
+  const scopeObj = doc.model.objects[scopeId];
+  if (!scopeObj) return [];
+  const parent = scopeObj.parentId ?? null;
+  const siblings = Object.values(doc.model.objects)
+    .filter((o) => (o.parentId ?? null) === parent && o.id !== scopeId)
+    .sort((a, b) => (a.name === b.name ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.name < b.name ? -1 : 1));
+  const scopeSub = subtreeOf(doc, scopeId);
+  const cids = Object.keys(doc.model.connections).sort();
+  const trays: ContextTray[] = [];
+  for (const sib of siblings) {
+    const sibSub = subtreeOf(doc, sib.id);
+    const involved = new Map<string, { objectId: string; name: string; kind: typeof sib.type }>();
+    for (const cid of cids) {
+      const c = doc.model.connections[cid];
+      const oInSib = sibSub.has(c.originId);
+      const tInSib = sibSub.has(c.targetId);
+      const oInScope = scopeSub.has(c.originId);
+      const tInScope = scopeSub.has(c.targetId);
+      if (!((oInSib && tInScope) || (tInSib && oInScope))) continue;
+      for (const end of [c.originId, c.targetId]) {
+        if (!sibSub.has(end) || end === sib.id) continue;
+        let cur = end;
+        let guard = 0;
+        while (guard < 1024) {
+          guard += 1;
+          const p = doc.model.objects[cur]?.parentId ?? null;
+          if (p === sib.id) break;
+          if (p == null) break;
+          cur = p;
+        }
+        const o = doc.model.objects[cur];
+        if (o && (o.parentId ?? null) === sib.id) {
+          involved.set(`${o.name}\n${o.id}`, { objectId: o.id, name: o.name, kind: o.type });
+        }
+      }
+    }
+    if (involved.size === 0) continue;
+    const children = [...involved.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([, v]) => v);
+    trays.push({
+      objectId: sib.id,
+      name: sib.name,
+      kind: sib.type,
+      caption: sib.caption,
+      side: trays.length % 2 === 0 ? "right" : "left",
+      children,
+    });
+  }
+  return trays;
+}
+
 function mockDiagramView(doc: SpecDocument, diagramId: string): DiagramView {
   const diagram = doc.diagrams[diagramId];
   if (!diagram) fail(`unknown diagram: ${diagramId}`);
@@ -495,6 +586,7 @@ function mockDiagramView(doc: SpecDocument, diagramId: string): DiagramView {
   const childCounts: Record<string, number> = {};
   for (const b of bids) childCounts[b] = childrenOf(doc, b).length;
   const edges = mockDiagramEdges(doc, diagramId);
+  const contextTrays = mockContextTrays(doc, diagramId);
   const breadcrumb: { id: string; name: string }[] = [];
   if (diagram.scopeObjectId) {
     const chain = ancestorsOf(doc, diagram.scopeObjectId).reverse();
@@ -514,6 +606,7 @@ function mockDiagramView(doc: SpecDocument, diagramId: string): DiagramView {
     objects,
     childCounts,
     edges,
+    contextTrays,
     breadcrumb,
     scope: scopeObj
       ? { id: scopeObj.id, name: scopeObj.name, kind: scopeObj.type }
@@ -606,6 +699,7 @@ function mockZoomInto(doc: SpecDocument, fromDiagramId: string, objectId: string
     connections: {},
     landing: {},
     autoPlaced: false,
+    showAllLabels: false,
     created: "",
     modified: "",
   };
@@ -632,6 +726,7 @@ function mockZoomInto(doc: SpecDocument, fromDiagramId: string, objectId: string
           connections: {},
           landing: {},
           autoPlaced: false,
+          showAllLabels: false,
           created: "",
           modified: "",
         },
@@ -667,12 +762,97 @@ const KIND_RANK: Record<string, number> = {
   component: 5,
 };
 
+/**
+ * First-open placement. Mirrors speculum-layout::place_missing EXACTLY
+ * (same JSON shapes rule): scoped diagrams pack 120x120 squares on a 180
+ * step (60px gaps); the top level uses the 220x110 wide variant; the
+ * vertical gap is 120 only between rows joined by labelled links.
+ */
+export const PACKING = {
+  boxS: 120,
+  cell: 180,
+  gap: 60,
+  gapLabelRow: 120,
+  boxWideW: 220,
+  boxWideH: 110,
+  framePad: 30,
+  frameHeader: 72,
+} as const;
+
+function gridCols(n: number): number {
+  if (n <= 0) return 1;
+  let cols = Math.ceil(Math.sqrt(n));
+  if (n > 16) cols = Math.min(6, Math.max(cols, Math.ceil(Math.sqrt((n * 4) / 3))));
+  else cols = Math.min(6, cols);
+  return Math.max(1, cols);
+}
+
+function orderByConnectivity(
+  doc: SpecDocument,
+  diagramId: string,
+  missing: { id: string; rank: number; name: string }[],
+): string[] {
+  const missingSet = new Set(missing.map((m) => m.id));
+  const d = doc.diagrams[diagramId];
+  const onDiagram = (oid: string): boolean => !!d?.boxes[oid];
+  const adj = new Map<string, Set<string>>();
+  const degree = new Map<string, number>();
+  for (const m of missing) {
+    adj.set(m.id, new Set());
+    degree.set(m.id, 0);
+  }
+  for (const c of Object.values(doc.model.connections)) {
+    const aIn = missingSet.has(c.originId);
+    const bIn = missingSet.has(c.targetId);
+    if (aIn && bIn) {
+      adj.get(c.originId)!.add(c.targetId);
+      adj.get(c.targetId)!.add(c.originId);
+      degree.set(c.originId, (degree.get(c.originId) ?? 0) + 1);
+      degree.set(c.targetId, (degree.get(c.targetId) ?? 0) + 1);
+    } else if (aIn && onDiagram(c.targetId)) {
+      degree.set(c.originId, (degree.get(c.originId) ?? 0) + 1);
+    } else if (bIn && onDiagram(c.originId)) {
+      degree.set(c.targetId, (degree.get(c.targetId) ?? 0) + 1);
+    }
+  }
+  const byId = new Map(missing.map((m) => [m.id, m]));
+  const unplaced = new Set(missing.map((m) => m.id));
+  const placed: string[] = [];
+  const placedSet = new Set<string>();
+  const cmp = (
+    a: { linked: number; deg: number; rank: number; name: string; id: string },
+    b: { linked: number; deg: number; rank: number; name: string; id: string },
+  ): number =>
+    b.linked - a.linked ||
+    b.deg - a.deg ||
+    a.rank - b.rank ||
+    (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  while (unplaced.size > 0) {
+    let best: { linked: number; deg: number; rank: number; name: string; id: string } | null = null;
+    for (const id of unplaced) {
+      const m = byId.get(id)!;
+      let linked = 0;
+      for (const o of adj.get(id) ?? []) if (placedSet.has(o)) linked += 1;
+      const cand = { linked, deg: degree.get(id) ?? 0, rank: m.rank, name: m.name, id };
+      if (best == null || cmp(cand, best) < 0) best = cand;
+    }
+    unplaced.delete(best!.id);
+    placedSet.add(best!.id);
+    placed.push(best!.id);
+  }
+  return placed;
+}
+
 function mockPlaceMissing(
   doc: SpecDocument,
   diagramId: string,
 ): Record<string, Rect> {
   const d = doc.diagrams[diagramId];
   if (!d) return {};
+  const scoped = d.scopeObjectId != null;
+  const boxW = scoped ? PACKING.boxS : PACKING.boxWideW;
+  const boxH = scoped ? PACKING.boxS : PACKING.boxWideH;
   const overlaps = (a: Rect, b: Rect) =>
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   const occupied: Rect[] = Object.values(d.boxes).filter(
@@ -687,30 +867,48 @@ function mockPlaceMissing(
         rank: o ? (KIND_RANK[o.type] ?? 6) : 6,
         name: o ? o.name : "",
       };
-    })
-    .sort((a, b) =>
-      a.rank === b.rank
-        ? a.name === b.name
-          ? a.id.localeCompare(b.id)
-          : a.name.localeCompare(b.name)
-        : a.rank - b.rank,
-    );
+    });
+  if (missing.length === 0) return {};
+  const ordered = orderByConnectivity(doc, diagramId, missing);
+  const cols = gridCols(Math.max(1, Object.keys(d.boxes).length));
+  const prow = new Map<string, number>();
+  ordered.forEach((id, i) => prow.set(id, Math.floor(i / cols)));
+  const labelledBetween = (ra: number, rb: number): boolean => {
+    if (ra === rb) return false;
+    const lo = Math.min(ra, rb);
+    const hi = Math.max(ra, rb);
+    if (hi !== lo + 1) return false;
+    return Object.values(doc.model.connections).some((c) => {
+      if (c.name.trim() === "") return false;
+      const pa = prow.get(c.originId);
+      const pb = prow.get(c.targetId);
+      return (
+        pa !== undefined &&
+        pb !== undefined &&
+        Math.min(pa, pb) === lo &&
+        Math.max(pa, pb) === hi
+      );
+    });
+  };
+  const snap2 = (v: number): number => Math.round(v / 2) * 2;
+  const rowY: number[] = [64];
+  const colX = (c: number): number => snap2(64 + c * (boxW + PACKING.gap));
   const out: Record<string, Rect> = {};
   let cell = 0;
-  for (const m of missing) {
+  for (const id of ordered) {
     for (;;) {
-      const col = cell % 4;
-      const row = Math.floor(cell / 4);
+      const col = cell % cols;
+      const row = Math.floor(cell / cols);
       cell += 1;
-      const r: Rect = {
-        x: 64 + col * (240 + 48),
-        y: 64 + row * (120 + 48),
-        w: 240,
-        h: 120,
-      };
+      while (rowY.length <= row) {
+        const prev = rowY.length - 1;
+        const gap = labelledBetween(prev, prev + 1) ? PACKING.gapLabelRow : PACKING.gap;
+        rowY.push(rowY[prev] + boxH + gap);
+      }
+      const r: Rect = { x: colX(col), y: snap2(rowY[row]), w: boxW, h: boxH };
       if (occupied.some((o) => overlaps(o, r))) continue;
       occupied.push(r);
-      out[m.id] = r;
+      out[id] = r;
       break;
     }
   }
@@ -766,6 +964,7 @@ function sampleCommands(): Command[] {
     O("obj-checkout", "Checkout Service", "component", "obj-webapp", false, "Runs checkout"),
     O("obj-tokenizer", "Card Tokenizer", "component", "obj-payments-api", false, "Tokenizes cards"),
     O("obj-cart-item", "Cart Item", "component", "obj-cart", false, "One line in the cart"),
+    O("obj-queue", "Orders Queue", "store", "obj-storefront", false, "Buffers order events"),
   ];
   for (const object of objs) cmds.push({ op: "createObject", object });
   const C = (
@@ -774,6 +973,11 @@ function sampleCommands(): Command[] {
     targetId: string,
     name: string,
     direction: "outgoing" | "bidirectional" = "outgoing",
+    extra: Partial<{
+      status: "live" | "future" | "deprecated" | "removed";
+      lineShape: "curved" | "straight" | "square";
+      viaId: string | null;
+    }> = {},
   ) =>
     ({
       op: "connect",
@@ -784,8 +988,9 @@ function sampleCommands(): Command[] {
         name,
         description: "",
         direction,
-        status: "live",
-        lineShape: "curved",
+        status: extra.status ?? "live",
+        lineShape: extra.lineShape ?? "curved",
+        ...(extra.viaId != null ? { viaId: extra.viaId } : {}),
         tagIds: [],
         technologies: [],
         links: [],
@@ -794,13 +999,19 @@ function sampleCommands(): Command[] {
   cmds.push(
     C("conn-1", "obj-customer", "obj-webapp", "browses"),
     C("conn-2", "obj-mobile", "obj-orders", "reads"),
-    C("conn-3", "obj-webapp", "obj-payments-api", "charges via"),
+    C("conn-3", "obj-webapp", "obj-payments-api", "charges via", "outgoing", { lineShape: "straight" }),
     C("conn-4", "obj-payments-api", "obj-orders", "syncs", "bidirectional"),
     C("conn-5", "obj-support", "obj-orders", "looks up"),
-    C("conn-6", "obj-cart", "obj-checkout", "hands off"),
+    C("conn-6", "obj-cart", "obj-checkout", "hands off", "outgoing", { lineShape: "square" }),
     C("conn-7", "obj-checkout", "obj-tokenizer", "tokenizes via"),
     C("conn-8", "obj-tokenizer", "obj-vault", "stores in"),
     C("conn-9", "obj-cart", "obj-cart-item", "holds"),
+    C("conn-10", "obj-storefront", "obj-webapp", "hosts"),
+    C("conn-11", "obj-webapp", "obj-orders", "enqueues via", "outgoing", { viaId: "obj-queue" }),
+    C("conn-12", "obj-mobile", "obj-cart", "will preview", "outgoing", { status: "future" }),
+    C("conn-13", "obj-checkout", "obj-orders", "archives", "outgoing", { status: "deprecated" }),
+    C("conn-14", "obj-cart", "obj-checkout", "streams to", "outgoing", { lineShape: "straight" }),
+    C("conn-15", "obj-customer", "obj-orders", "reorders"),
   );
   const D = (
     id: string,
@@ -813,41 +1024,44 @@ function sampleCommands(): Command[] {
     ({
       op: "createDiagram",
       diagram: {
-        id,
-        name,
-        level,
-        scopeObjectId,
-        description: "",
-        order,
-        pinned: false,
-        boxes,
-        connections: {},
-        landing: {},
-        autoPlaced: false,
-        created: "",
-        modified: "",
-      },
+          id,
+          name,
+          level,
+          scopeObjectId,
+          description: "",
+          order,
+          pinned: false,
+          boxes,
+          connections: {},
+          landing: {},
+          autoPlaced: false,
+          showAllLabels: false,
+          created: "",
+          modified: "",
+        },
     }) as Command;
-  const R = (x: number, y: number, w = 240, h = 120): Rect => ({ x, y, w, h });
+  // Tight packing (mirrors speculum-core sample.rs EXACTLY): scoped
+  // diagrams use 120x120 squares, the landscape the 220x110 variant.
+  const R = (x: number, y: number, w: number, h: number): Rect => ({ x, y, w, h });
   cmds.push(
     D("dg-landscape", "Shop Landscape", "context", null, 0, {
-      "obj-customer": R(64, 64),
-      "obj-support": R(64, 232),
-      "obj-storefront": R(352, 64),
-      "obj-payments": R(352, 232),
-      "obj-cloud": R(640, 64, 240, 288),
+      "obj-storefront": R(64, 64, 220, 110),
+      "obj-customer": R(344, 64, 220, 110),
+      "obj-payments": R(624, 64, 220, 110),
+      "obj-support": R(64, 294, 220, 110),
+      "obj-cloud": R(344, 294, 220, 110),
     }),
     D("dg-storefront", "Storefront Apps", "app", "obj-storefront", 1, {
-      "obj-webapp": R(64, 64),
-      "obj-mobile": R(352, 64),
-      "obj-orders": R(640, 64),
-      "obj-cart": R(64, 232),
-      "obj-checkout": R(352, 232),
+      "obj-cart": R(64, 96, 120, 120),
+      "obj-checkout": R(244, 96, 120, 120),
+      "obj-orders": R(424, 96, 120, 120),
+      "obj-mobile": R(64, 336, 120, 120),
+      "obj-webapp": R(244, 336, 120, 120),
     }),
     D("dg-payments-api", "Payments API Internals", "component", "obj-payments-api", 2, {
-      "obj-tokenizer": R(352, 64),
-      "obj-vault": R(640, 64),
-      "obj-checkout": R(64, 232),
+      "obj-tokenizer": R(64, 96, 120, 120),
+      "obj-checkout": R(244, 96, 120, 120),
+      "obj-vault": R(64, 336, 120, 120),
     }),
   );
   return cmds;

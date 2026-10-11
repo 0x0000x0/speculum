@@ -1,6 +1,7 @@
 pub const APP_NAME: &str = "Speculum";
 
 pub mod command;
+pub mod context;
 pub mod history;
 pub mod model;
 pub mod rollup;
@@ -17,6 +18,7 @@ pub use model::{
     StepKind, Tag, TagGroup, Viewport,
 };
 pub use rollup::{diagram_edges, hover_set, step_location, Endpoint, HoverSet, StepLocation, ViewEdge};
+pub use context::{context_trays, ContextTray, ContextTrayChild};
 pub use sample::{is_empty_model, seed_sample_command};
 pub use search::{search, search_model, Hit};
 pub use validate::{repair, repair_document, scope_box_removal_commands, validate, validate_document, Issue, Severity};

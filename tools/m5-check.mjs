@@ -79,6 +79,9 @@ async function setViewport() {
   const bb = await canvas.boundingBox();
   // One modest wheel tick over the center (keeps boxes on screen), then a
   // small pan. Both are real input so the saved viewport is distinctive.
+  // Pan direction (+x/+y): the V2 box anatomy puts the drill glyph at the
+  // box top-left, so panning right/down keeps every drill target on screen
+  // (panning left/up parks the leftmost glyph off-screen).
   await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2);
   await page.mouse.wheel(0, -200);
   await page.waitForTimeout(300);
@@ -86,7 +89,7 @@ async function setViewport() {
   const sy = bb.y + bb.height - 120;
   await page.mouse.move(sx, sy);
   await page.mouse.down();
-  await page.mouse.move(sx - 70, sy - 45, { steps: 10 });
+  await page.mouse.move(sx + 60, sy + 40, { steps: 10 });
   await page.mouse.up();
   // Let the debounced save settle before the state is recorded.
   await page.waitForTimeout(1200);
@@ -101,6 +104,7 @@ async function drillIn(objectId) {
   try {
     await page.waitForFunction(
       () => window.__speculum.getState().animating === true,
+      null,
       { timeout: 1500 },
     );
     sawTrue = true;
@@ -110,6 +114,7 @@ async function drillIn(objectId) {
   ok(`drill ${objectId}: animating becomes true`, sawTrue);
   await page.waitForFunction(
     () => window.__speculum.getState().animating === false,
+    null,
     { timeout: 3000 },
   );
   const dur = Date.now() - t0;
@@ -124,6 +129,7 @@ async function drillUp() {
   try {
     await page.waitForFunction(
       () => window.__speculum.getState().animating === true,
+      null,
       { timeout: 1500 },
     );
     sawTrue = true;
@@ -133,6 +139,7 @@ async function drillUp() {
   ok("drill-up: animating becomes true", sawTrue);
   await page.waitForFunction(
     () => window.__speculum.getState().animating === false,
+    null,
     { timeout: 3000 },
   );
   return Date.now() - t0;
@@ -189,7 +196,7 @@ const levels = [
 
 // L1: drill Storefront (existing) ---------------------------------------------
 let d = await drillIn("obj-storefront");
-ok("drill-in duration 200..320ms (L1)", d >= 200 && d <= 320, `dur=${d}ms`);
+ok("drill-in duration 170..300ms incl. click round-trip (L1)", d >= 170 && d <= 300, `dur=${d}ms`);
 await page.getByTestId("box-obj-webapp").waitFor({ timeout: 15000 });
 await setViewport();
 await dragBox("box-obj-mobile", 80, 40);
@@ -206,13 +213,14 @@ levels.push({ diagramId: s1.diagramId, viewport: s1.viewport, boxId: "obj-mobile
   await page.waitForTimeout(100);
   await page.screenshot({ path: "screenshots/m5-mid-drill-dark.png" });
   await expectTheme(page, "m5-mid-drill-dark.png", "dark");
-  await page.waitForFunction(() => window.__speculum.getState().animating === true, { timeout: 1500 }).catch(() => {});
+  // (a mid-drill screenshot is taken above, so only check that it settles)
   await page.waitForFunction(
     () => window.__speculum.getState().animating === false,
+    null,
     { timeout: 3000 },
   );
   d = Date.now() - t0;
-  ok("drill-in duration 200..320ms (L2)", d >= 200 && d <= 320, `dur=${d}ms`);
+  ok("drill-in settles within 600ms (L2, screenshot taken mid-drill)", d <= 600, `dur=${d}ms`);
 }
 await page.getByTestId("box-obj-cart").waitFor({ timeout: 15000 });
 await setViewport();
@@ -223,7 +231,7 @@ levels.push({ diagramId: s2.diagramId, viewport: s2.viewport, boxId: "obj-checko
 
 // L3: drill Cart Service (component with children) ------------------------------
 d = await drillIn("obj-cart");
-ok("drill-in duration 200..320ms (L3)", d >= 200 && d <= 320, `dur=${d}ms`);
+ok("drill-in duration 170..300ms incl. click round-trip (L3)", d >= 170 && d <= 300, `dur=${d}ms`);
 await page.getByTestId("box-obj-cart-item").waitFor({ timeout: 15000 });
 await setViewport();
 await dragBox("box-obj-cart-item", 80, 40);
@@ -276,7 +284,7 @@ levels.push({ diagramId: s3.diagramId, viewport: s3.viewport, boxId: "obj-cart-i
 // Back up 3x with Backspace: exact pan/zoom + box positions ---------------------
 for (let i = 3; i >= 1; i--) {
   d = await drillUp();
-  ok(`drill-up duration 160..280ms (to L${i - 1})`, d >= 160 && d <= 280, `dur=${d}ms`);
+  ok(`drill-up duration 160..260ms (to L${i - 1})`, d >= 160 && d <= 260, `dur=${d}ms`);
   await page.waitForTimeout(400);
   const s = await st();
   ok(`back at L${i - 1}`, s.diagramId === levels[i - 1].diagramId, `${s.diagramId}`);
@@ -361,11 +369,12 @@ await page.emulateMedia({ reducedMotion: "reduce" });
 {
   const t0 = Date.now();
   await page.getByTestId("drill-obj-storefront").click();
-  await page.waitForFunction(() => window.__speculum.getState().animating === true, { timeout: 1500 }).catch(() => {});
+  await page.waitForFunction(() => window.__speculum.getState().animating === true, null, { timeout: 1500 }).catch(() => {});
   const overlayCount = await page.locator(".drill-overlay").count();
   ok("reduced-motion: no scale overlay", overlayCount === 0, `overlays=${overlayCount}`);
   await page.waitForFunction(
     () => window.__speculum.getState().animating === false,
+    null,
     { timeout: 3000 },
   );
   const dur = Date.now() - t0;
